@@ -1,0 +1,25 @@
+name: Pret Carburanti ANRE
+
+on:
+  schedule:
+    - cron: '0 7 * * 1-5'  # Luni-Vineri la 07:00 UTC (10:00 Moldova)
+  workflow_dispatch:         # permite si rulare manuala din GitHub
+
+jobs:
+  send-prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Instalare dependențe
+        run: pip install -r requirements.txt
+
+      - name: Rulare bot
+        run: python bot.py
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID:   ${{ secrets.CHAT_ID }}
