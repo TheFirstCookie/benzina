@@ -2,28 +2,27 @@ import requests
 from bs4 import BeautifulSoup
 import os
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "TOKEN_TĂU_AICI")
-CHAT_ID   = os.environ.get("CHAT_ID",   "CHAT_ID_TĂU_AICI")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHAT_ID   = os.environ.get("CHAT_ID", "")
 
 URLS = {
-    "Benzină 95": "https://anre.md/benzina-95-3-2",
-    "Motorină":   "https://anre.md/motorina-3-3",
+    "Benzina 95": "https://anre.md/benzina-95-3-2",
+    "Motorina":   "https://anre.md/motorina-3-3",
 }
 
 def get_price(url):
     headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers)
+    r = requests.get(url, headers=headers, verify=False)
     soup = BeautifulSoup(r.text, "html.parser")
 
     table = soup.find("table")
-    rows = table.find_all("tr")
+    rows = [row for row in table.find_all("tr") if row.find("td")]
 
-    # rows[1] = azi, rows[2] = ieri
-    azi   = rows[1].find_all("td")
-    ieri  = rows[2].find_all("td")
+    azi  = rows[0].find_all("td")
+    ieri = rows[1].find_all("td")
 
-    pret_azi  = float(azi[8].text.strip().replace(",", "."))
-    pret_ieri = float(ieri[8].text.strip().replace(",", "."))
+    pret_azi  = float(azi[-1].text.strip().replace(",", "."))
+    pret_ieri = float(ieri[-1].text.strip().replace(",", "."))
     diferenta = round(pret_azi - pret_ieri, 2)
 
     return {
@@ -35,15 +34,15 @@ def get_price(url):
 def format_block(nume, info):
     diff = info["diferenta"]
     if diff > 0:
-        trend = f"🔺 +{diff:.2f} lei față de ieri"
+        trend = f"🔺 +{diff:.2f} lei fata de ieri"
     elif diff < 0:
-        trend = f"🔻 {diff:.2f} lei față de ieri"
+        trend = f"🔻 {diff:.2f} lei fata de ieri"
     else:
-        trend = "➡️ Neschimbat față de ieri"
+        trend = "➡️ Neschimbat fata de ieri"
 
     return (
         f"*{nume}*\n"
-        f"💰 Preț: `{info['pret']:.2f} lei/litru`\n"
+        f"💰 Pret: `{info['pret']:.2f} lei/litru`\n"
         f"{trend}"
     )
 
@@ -56,19 +55,22 @@ def send_to_telegram(message):
     })
 
 if __name__ == "__main__":
-    benzina = get_price(URLS["Benzină 95"])
-    motorina = get_price(URLS["Motorină"])
+    import urllib3
+    urllib3.disable_warnings()
+
+    benzina  = get_price(URLS["Benzina 95"])
+    motorina = get_price(URLS["Motorina"])
 
     mesaj = (
-        f"⛽ *Prețuri Carburanți — ANRE Moldova*\n"
+        f"⛽ *Preturi Carburanti — ANRE Moldova*\n"
         f"📅 {benzina['data']}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"{format_block('Benzină 95', benzina)}\n\n"
-        f"{format_block('Motorină', motorina)}\n"
+        f"{format_block('Benzina 95', benzina)}\n\n"
+        f"{format_block('Motorina', motorina)}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"_Sursa: anre.md_"
     )
 
-    send_to_telegram(mesaj)
-    print("Mesaj trimis cu succes!")
     print(mesaj)
+    send_to_telegram(mesaj)
+    print("Mesaj trimis!")
