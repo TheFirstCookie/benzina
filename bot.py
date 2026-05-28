@@ -88,7 +88,7 @@ def make_chart(b_dates, b_prices, m_dates, m_prices):
 
     ax.set_title("Graficul Pretului Carburantilor — ANRE Moldova", color="white", fontsize=13, pad=12)
     ax.set_ylabel("Pret (lei/litru)", color="#aaaaaa")
-    ax.set_ylim(bottom=20)  # Axa Y incepe de la 20
+    ax.set_ylim(bottom=26)  # Axa Y incepe de la 20
     ax.tick_params(colors="#aaaaaa")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=2))
@@ -158,7 +158,7 @@ if __name__ == "__main__":
         m_weekly = get_weekly_change(m_dates, m_prices)
         caption += format_weekly(b_weekly, m_weekly)
 
-    caption += f"\n_Sursa: https://anre.md/benzina-95-3-2_"
-    caption += f"\n_Sursa: https://anre.md/motorina-3-3_"
+    caption += f"\n_Sursa: anre.md/benzina-95-3-2_"
+    caption += f"\n_Sursa: anre.md/motorina-3-3_"
 
     send_photo_telegram(chart, caption)
