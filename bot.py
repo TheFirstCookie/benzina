@@ -176,7 +176,7 @@ def make_chart(b_dates, b_prices, m_dates, m_prices):
     ax.set_ylim(y_min, y_max)
 
     # Incrementare cu 0.5
-    ax.yaxis.set_major_locator(MultipleLocator(0.25))
+    ax.yaxis.set_major_locator(MultipleLocator(0.5))
 
     ax.tick_params(colors="#aaaaaa")
 
