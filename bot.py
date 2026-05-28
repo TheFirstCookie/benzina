@@ -87,15 +87,16 @@ def get_latest(url):
     rows = [row for row in table.find_all("tr") if row.find("td")]
 
     azi = rows[0].find_all("td")
-    ieri = rows[1].find_all("td")
+    ultima_data = rows[1].find_all("td")
 
     pret_azi = float(azi[-1].text.strip().replace(",", "."))
-    pret_ieri = float(ieri[-1].text.strip().replace(",", "."))
+    pret_ultima_data = float(ultima_data[-1].text.strip().replace(",", "."))
 
     return {
         "data": azi[0].text.strip(),
         "pret": pret_azi,
-        "diferenta": round(pret_azi - pret_ieri, 2),
+        "diferenta": round(pret_azi - pret_ultima_data, 2),
+        "data_comparatie": ultima_data[0].text.strip(),
     }
 
 
@@ -227,15 +228,16 @@ def make_chart(b_dates, b_prices, m_dates, m_prices):
 def format_block(nume, info):
 
     diff = info["diferenta"]
+    data_comparatie = info["data_comparatie"]
 
     if diff > 0:
-        trend = f"🔺 +{diff:.2f} lei fata de ieri"
+        trend = f"🔺 +{diff:.2f} lei fata de {data_comparatie}"
 
     elif diff < 0:
-        trend = f"🔻 {diff:.2f} lei fata de ieri"
+        trend = f"🔻 {diff:.2f} lei fata de {data_comparatie}"
 
     else:
-        trend = "➡️ Neschimbat fata de ieri"
+        trend = f"➡️ Neschimbat fata de {data_comparatie}"
 
     return (
         f"*{nume}*\n"
