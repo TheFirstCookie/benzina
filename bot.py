@@ -171,13 +171,13 @@ def make_chart(b_dates, b_prices, m_dates, m_prices):
     current_min = min(all_prices)
     current_max = max(all_prices)
 
-    y_min = current_min - 1
-    y_max = current_max + 1
+    y_min = current_min - 0.5
+    y_max = current_max + 0.5
 
     ax.set_ylim(y_min, y_max)
 
     # Incrementare cu 0.5
-    ax.yaxis.set_major_locator(MultipleLocator(0.5))
+    ax.yaxis.set_major_locator(MultipleLocator(0.25))
 
     ax.tick_params(colors="#aaaaaa")
 
