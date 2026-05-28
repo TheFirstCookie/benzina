@@ -68,6 +68,13 @@ def get_latest(url):
         "diferenta": round(pret_azi - pret_ieri, 2),
     }
 
+def get_weekly_change(dates, prices):
+    if len(prices) >= 6:
+        return round(prices[-1] - prices[-6], 2)
+    elif len(prices) >= 2:
+        return round(prices[-1] - prices[0], 2)
+    return 0.0
+
 def make_chart(b_dates, b_prices, m_dates, m_prices):
     fig, ax = plt.subplots(figsize=(10, 5))
     fig.patch.set_facecolor("#1a1a2e")
@@ -81,6 +88,7 @@ def make_chart(b_dates, b_prices, m_dates, m_prices):
 
     ax.set_title("Graficul Pretului Carburantilor — ANRE Moldova", color="white", fontsize=13, pad=12)
     ax.set_ylabel("Pret (lei/litru)", color="#aaaaaa")
+    ax.set_ylim(bottom=20)  # Axa Y incepe de la 20
     ax.tick_params(colors="#aaaaaa")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=2))
@@ -107,6 +115,18 @@ def format_block(nume, info):
         trend = "➡️ Neschimbat fata de ieri"
     return f"*{nume}*\n💰 Pret: `{info['pret']:.2f} lei/litru`\n{trend}"
 
+def format_weekly(b_diff, m_diff):
+    def arrow(d):
+        if d > 0:   return f"🔺 +{d:.2f} lei"
+        elif d < 0: return f"🔻 {d:.2f} lei"
+        else:       return f"➡️ neschimbat"
+
+    return (
+        f"\n📊 *Rezumat saptamana:*\n"
+        f"Benzina 95: {arrow(b_diff)}\n"
+        f"Motorina:   {arrow(m_diff)}"
+    )
+
 def send_photo_telegram(image_buf, caption):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     requests.post(url, data={
@@ -129,9 +149,16 @@ if __name__ == "__main__":
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{format_block('Benzina 95', benzina)}\n\n"
         f"{format_block('Motorina', motorina)}\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"_Sursa: anre.md_"
+        f"━━━━━━━━━━━━━━━━━━"
     )
 
+    today = datetime.now()
+    if today.weekday() == 4:  # 4 = Vineri
+        b_weekly = get_weekly_change(b_dates, b_prices)
+        m_weekly = get_weekly_change(m_dates, m_prices)
+        caption += format_weekly(b_weekly, m_weekly)
+
+    caption += f"\n_Sursa: https://anre.md/benzina-95-3-2_"
+    caption += f"\n_Sursa: https://anre.md/motorina-3-3_"
+
     send_photo_telegram(chart, caption)
-    print("Trimis cu succes!")
