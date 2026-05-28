@@ -1,6 +1,12 @@
 import requests
 from bs4 import BeautifulSoup
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from datetime import datetime
 import os
+import io
+import urllib3
+urllib3.disable_warnings()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID   = os.environ.get("CHAT_ID", "")
@@ -10,26 +16,86 @@ URLS = {
     "Motorina":   "https://anre.md/motorina-3-3",
 }
 
-def get_price(url):
+LUNI = {
+    "ianuarie": "01", "februarie": "02", "martie": "03",
+    "aprilie": "04", "mai": "05", "iunie": "06",
+    "iulie": "07", "august": "08", "septembrie": "09",
+    "octombrie": "10", "noiembrie": "11", "decembrie": "12"
+}
+
+def parse_date(s):
+    s = s.strip().lower()
+    for luna_ro, luna_nr in LUNI.items():
+        if luna_ro in s:
+            s = s.replace(luna_ro, luna_nr)
+            break
+    try:
+        return datetime.strptime(s, "%d %m %Y")
+    except:
+        return None
+
+def get_history(url, limit=15):
     headers = {"User-Agent": "Mozilla/5.0"}
     r = requests.get(url, headers=headers, verify=False)
     soup = BeautifulSoup(r.text, "html.parser")
-
     table = soup.find("table")
     rows = [row for row in table.find_all("tr") if row.find("td")]
 
+    dates, prices = [], []
+    for row in rows[:limit]:
+        cols = row.find_all("td")
+        d = parse_date(cols[0].text)
+        p = float(cols[-1].text.strip().replace(",", "."))
+        if d:
+            dates.append(d)
+            prices.append(p)
+
+    return list(reversed(dates)), list(reversed(prices))
+
+def get_latest(url):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    r = requests.get(url, headers=headers, verify=False)
+    soup = BeautifulSoup(r.text, "html.parser")
+    table = soup.find("table")
+    rows = [row for row in table.find_all("tr") if row.find("td")]
     azi  = rows[0].find_all("td")
     ieri = rows[1].find_all("td")
-
     pret_azi  = float(azi[-1].text.strip().replace(",", "."))
     pret_ieri = float(ieri[-1].text.strip().replace(",", "."))
-    diferenta = round(pret_azi - pret_ieri, 2)
-
     return {
         "data":      azi[0].text.strip(),
         "pret":      pret_azi,
-        "diferenta": diferenta,
+        "diferenta": round(pret_azi - pret_ieri, 2),
     }
+
+def make_chart(b_dates, b_prices, m_dates, m_prices):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("#1a1a2e")
+    ax.set_facecolor("#16213e")
+
+    ax.plot(b_dates, b_prices, color="#4fc3f7", linewidth=2.5, marker="o", markersize=4, label="Benzina 95")
+    ax.fill_between(b_dates, b_prices, alpha=0.15, color="#4fc3f7")
+
+    ax.plot(m_dates, m_prices, color="#81c784", linewidth=2.5, marker="o", markersize=4, label="Motorina")
+    ax.fill_between(m_dates, m_prices, alpha=0.15, color="#81c784")
+
+    ax.set_title("Graficul Pretului Carburantilor — ANRE Moldova", color="white", fontsize=13, pad=12)
+    ax.set_ylabel("Pret (lei/litru)", color="#aaaaaa")
+    ax.tick_params(colors="#aaaaaa")
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=2))
+    plt.xticks(rotation=35)
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#333355")
+    ax.legend(facecolor="#1a1a2e", labelcolor="white", framealpha=0.8)
+    ax.grid(axis="y", color="#333355", linestyle="--", alpha=0.5)
+
+    buf = io.BytesIO()
+    plt.tight_layout()
+    plt.savefig(buf, format="png", dpi=130, facecolor=fig.get_facecolor())
+    buf.seek(0)
+    plt.close()
+    return buf
 
 def format_block(nume, info):
     diff = info["diferenta"]
@@ -39,29 +105,25 @@ def format_block(nume, info):
         trend = f"🔻 {diff:.2f} lei fata de ieri"
     else:
         trend = "➡️ Neschimbat fata de ieri"
+    return f"*{nume}*\n💰 Pret: `{info['pret']:.2f} lei/litru`\n{trend}"
 
-    return (
-        f"*{nume}*\n"
-        f"💰 Pret: `{info['pret']:.2f} lei/litru`\n"
-        f"{trend}"
-    )
-
-def send_to_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, json={
+def send_photo_telegram(image_buf, caption):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    requests.post(url, data={
         "chat_id":    CHAT_ID,
-        "text":       message,
+        "caption":    caption,
         "parse_mode": "Markdown"
-    })
+    }, files={"photo": ("chart.png", image_buf, "image/png")})
 
 if __name__ == "__main__":
-    import urllib3
-    urllib3.disable_warnings()
+    b_dates, b_prices = get_history(URLS["Benzina 95"])
+    m_dates, m_prices = get_history(URLS["Motorina"])
+    benzina  = get_latest(URLS["Benzina 95"])
+    motorina = get_latest(URLS["Motorina"])
 
-    benzina  = get_price(URLS["Benzina 95"])
-    motorina = get_price(URLS["Motorina"])
+    chart = make_chart(b_dates, b_prices, m_dates, m_prices)
 
-    mesaj = (
+    caption = (
         f"⛽ *Preturi Carburanti — ANRE Moldova*\n"
         f"📅 {benzina['data']}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -71,6 +133,5 @@ if __name__ == "__main__":
         f"_Sursa: anre.md_"
     )
 
-    print(mesaj)
-    send_to_telegram(mesaj)
-    print("Mesaj trimis!")
+    send_photo_telegram(chart, caption)
+    print("Trimis cu succes!")
