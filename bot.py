@@ -4,14 +4,18 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.ticker import MultipleLocator
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 import io
+import logging
 import urllib3
 
 urllib3.disable_warnings()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID   = os.environ.get("CHAT_ID", "")
+TIMEZONE  = ZoneInfo(os.environ.get("TIMEZONE", "Europe/Chisinau"))
+REQUEST_TIMEOUT = 30
 
 URLS = {
     "Benzina 95": "https://anre.md/benzina-95-3-2",
@@ -48,16 +52,44 @@ def parse_date(s):
         return None
 
 
-def get_history(url, limit=15):
+def parse_price(s):
+    clean = s.strip().replace("\xa0", "").replace(" ", "")
+
+    if "," in clean:
+        clean = clean.replace(".", "").replace(",", ".")
+
+    return float(clean)
+
+
+def get_table_rows(url):
     headers = {
         "User-Agent": "Mozilla/5.0"
     }
 
-    r = requests.get(url, headers=headers, verify=False)
-    soup = BeautifulSoup(r.text, "html.parser")
+    r = requests.get(
+        url,
+        headers=headers,
+        verify=False,
+        timeout=REQUEST_TIMEOUT
+    )
+    r.raise_for_status()
 
+    soup = BeautifulSoup(r.text, "html.parser")
     table = soup.find("table")
+
+    if table is None:
+        raise RuntimeError(f"Nu am gasit tabelul ANRE in pagina: {url}")
+
     rows = [row for row in table.find_all("tr") if row.find("td")]
+
+    if len(rows) < 2:
+        raise RuntimeError(f"Tabelul ANRE nu are suficiente randuri: {url}")
+
+    return rows
+
+
+def get_history(url, limit=15):
+    rows = get_table_rows(url)
 
     dates = []
     prices = []
@@ -66,7 +98,7 @@ def get_history(url, limit=15):
         cols = row.find_all("td")
 
         d = parse_date(cols[0].text)
-        p = float(cols[-1].text.strip().replace(",", "."))
+        p = parse_price(cols[-1].text)
 
         if d:
             dates.append(d)
@@ -76,21 +108,13 @@ def get_history(url, limit=15):
 
 
 def get_latest(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    r = requests.get(url, headers=headers, verify=False)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    table = soup.find("table")
-    rows = [row for row in table.find_all("tr") if row.find("td")]
+    rows = get_table_rows(url)
 
     azi = rows[0].find_all("td")
     ultima_data = rows[1].find_all("td")
 
-    pret_azi = float(azi[-1].text.strip().replace(",", "."))
-    pret_ultima_data = float(ultima_data[-1].text.strip().replace(",", "."))
+    pret_azi = parse_price(azi[-1].text)
+    pret_ultima_data = parse_price(ultima_data[-1].text)
 
     return {
         "data": azi[0].text.strip(),
@@ -266,10 +290,15 @@ def format_weekly(b_diff, m_diff):
 
 
 def send_photo_telegram(image_buf, caption):
+    if not BOT_TOKEN:
+        raise RuntimeError("Lipseste secretul BOT_TOKEN")
+
+    if not CHAT_ID:
+        raise RuntimeError("Lipseste secretul CHAT_ID")
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
-    requests.post(
+    response = requests.post(
         url,
         data={
             "chat_id": CHAT_ID,
@@ -278,11 +307,36 @@ def send_photo_telegram(image_buf, caption):
         },
         files={
             "photo": ("chart.png", image_buf, "image/png")
-        }
+        },
+        timeout=REQUEST_TIMEOUT
+    )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {"description": response.text[:500]}
+
+    if not response.ok or not payload.get("ok", False):
+        description = payload.get("description", payload)
+        raise RuntimeError(
+            f"Telegram sendPhoto a esuat ({response.status_code}): {description}"
+        )
+
+    message = payload.get("result", {})
+    logging.info(
+        "Telegram a acceptat mesajul: message_id=%s",
+        message.get("message_id")
     )
 
 
-if __name__ == "__main__":
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s"
+    )
+
+    today = datetime.now(TIMEZONE)
+    logging.info("Rulez botul pentru data locala: %s", today.date())
 
     b_dates, b_prices = get_history(URLS["Benzina 95"])
     m_dates, m_prices = get_history(URLS["Motorina"])
@@ -306,8 +360,6 @@ if __name__ == "__main__":
         f"━━━━━━━━━━━━━━━━━━"
     )
 
-    today = datetime.now()
-
     # Vineri
     if today.weekday() == 4:
 
@@ -330,3 +382,7 @@ if __name__ == "__main__":
     caption += "\n_Sursa: anre.md/motorina-3-3_"
 
     send_photo_telegram(chart, caption)
+
+
+if __name__ == "__main__":
+    main()
