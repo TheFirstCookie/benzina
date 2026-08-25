@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '17 12 * * 1-5' # Luni-Vineri la 12:17 Moldova; evitam minutul 00, unde GitHub Actions are des intarzieri
       timezone: "Europe/Chisinau"
-  workflow_dispatch:         # permite si rulare manuala din GitHub
+  workflow_dispatch:         # permite si rulare manuala din GitHubs
 
 jobs:
   send-prices:
