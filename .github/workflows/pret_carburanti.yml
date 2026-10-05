@@ -2,7 +2,7 @@ name: Pret Carburanti ANRE
 
 on:
   schedule:
-    - cron: '15 12 * * 1-5' # Luni-Vineri la 12:17 Moldova; evitam minutul 00, unde GitHub Actions are des intarzieri
+    - cron: '15 10 * * 1-5' # Luni-Vineri la 12:17 Moldova; evitam minutul 00, unde GitHub Actions are des intarzieri
       timezone: "Europe/Chisinau"
   workflow_dispatch:         # permite si rulare manuala din GitHubs
 
