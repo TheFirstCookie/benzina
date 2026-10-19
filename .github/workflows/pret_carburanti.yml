@@ -1,10 +1,5 @@
 name: Pret Carburanti ANRE
 
-# GitHub porneste cron-urile cu intarzieri de cateva ore, deci nu ne putem baza
-# pe ora din cron. Workflow-ul porneste de mai multe ori dimineata (ore UTC),
-# iar botul asteapta singur pana la 12:15 ora Moldovei (SEND_AT) si trimite.
-# Daca toate pornirile intarzie peste 12:15, primul run care ajunge trimite imediat.
-# Un marker in cache garanteaza ca mesajul se trimite o singura data pe zi.
 on:
   schedule:
     - cron: '7 5 * * 1-5'
