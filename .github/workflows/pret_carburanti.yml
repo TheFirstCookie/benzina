@@ -1,27 +1,68 @@
 name: Pret Carburanti ANRE
 
+# GitHub porneste cron-urile cu intarzieri de cateva ore, deci nu ne putem baza
+# pe ora din cron. Workflow-ul porneste de mai multe ori dimineata (ore UTC),
+# iar botul asteapta singur pana la 12:15 ora Moldovei (SEND_AT) si trimite.
+# Daca toate pornirile intarzie peste 12:15, primul run care ajunge trimite imediat.
+# Un marker in cache garanteaza ca mesajul se trimite o singura data pe zi.
 on:
   schedule:
-    - cron: '15 10 * * 1-5' # Luni-Vineri la 12:17 Moldova; evitam minutul 00, unde GitHub Actions are des intarzieri
-      timezone: "Europe/Chisinau"
-  workflow_dispatch:         # permite si rulare manuala din GitHubs
+    - cron: '7 5 * * 1-5'
+    - cron: '37 6 * * 1-5'
+    - cron: '7 8 * * 1-5'
+    - cron: '37 9 * * 1-5'
+    - cron: '7 11 * * 1-5'
+    - cron: '7 13 * * 1-5'
+  workflow_dispatch:         # rulare manuala din GitHub: trimite imediat
 
 jobs:
   send-prices:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
+    concurrency:
+      group: send-prices-${{ github.event_name }}
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v3
+      - name: Data de azi (Moldova)
+        id: today
+        run: echo "date=$(TZ=Europe/Chisinau date +%F)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-python@v4
+      - name: Verific daca mesajul de azi a fost deja trimis
+        id: sent
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@v6
         with:
-          python-version: '3.11'
+          path: sent.marker
+          key: sent-${{ steps.today.outputs.date }}
+          lookup-only: true
+
+      - uses: actions/checkout@v7
+        if: steps.sent.outputs.cache-hit != 'true'
+
+      - uses: actions/setup-python@v7
+        if: steps.sent.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.12'
 
       - name: Instalare dependențe
+        if: steps.sent.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
 
       - name: Rulare bot
+        if: steps.sent.outputs.cache-hit != 'true'
         run: python bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID:   ${{ secrets.CHAT_ID }}
           TIMEZONE:  Europe/Chisinau
+          SEND_AT:   ${{ github.event_name == 'schedule' && '12:15' || '' }}
+
+      - name: Marchez mesajul de azi ca trimis
+        if: github.event_name == 'schedule' && steps.sent.outputs.cache-hit != 'true'
+        run: touch sent.marker
+
+      - uses: actions/cache/save@v6
+        if: github.event_name == 'schedule' && steps.sent.outputs.cache-hit != 'true'
+        with:
+          path: sent.marker
+          key: sent-${{ steps.today.outputs.date }}

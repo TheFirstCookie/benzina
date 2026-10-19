@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
 import io
+import time
 import logging
 import urllib3
 
@@ -15,7 +16,11 @@ urllib3.disable_warnings()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID   = os.environ.get("CHAT_ID", "")
 TIMEZONE  = ZoneInfo(os.environ.get("TIMEZONE", "Europe/Chisinau"))
+# Ora locala (HH:MM) la care se trimite mesajul; gol = trimite imediat
+SEND_AT   = os.environ.get("SEND_AT", "").strip()
 REQUEST_TIMEOUT = 30
+FETCH_ATTEMPTS = 8
+FETCH_RETRY_DELAY = 45
 
 URLS = {
     "Benzina 95": "https://anre.md/benzina-95-3-2",
@@ -62,6 +67,21 @@ def parse_price(s):
 
 
 def get_table_rows(url):
+    # anre.md uneori raspunde cu o pagina fara tabel sau nu raspunde deloc
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            return fetch_table_rows(url)
+        except (requests.RequestException, RuntimeError) as e:
+            if attempt == FETCH_ATTEMPTS:
+                raise
+            logging.warning(
+                "Incercarea %d/%d a esuat pentru %s: %s",
+                attempt, FETCH_ATTEMPTS, url, e
+            )
+            time.sleep(FETCH_RETRY_DELAY)
+
+
+def fetch_table_rows(url):
     headers = {
         "User-Agent": "Mozilla/5.0"
     }
@@ -88,9 +108,7 @@ def get_table_rows(url):
     return rows
 
 
-def get_history(url, limit=15):
-    rows = get_table_rows(url)
-
+def get_history(rows, limit=15):
     dates = []
     prices = []
 
@@ -107,10 +125,8 @@ def get_history(url, limit=15):
     return list(reversed(dates)), list(reversed(prices))
 
 
-def get_latest(url):
-    rows = get_table_rows(url)
-
-    azi = rows[0].find_all("td")
+def get_latest(rows):
+    azi =rows[0].find_all("td")
     ultima_data = rows[1].find_all("td")
 
     pret_azi = parse_price(azi[-1].text)
@@ -329,20 +345,44 @@ def send_photo_telegram(image_buf, caption):
     )
 
 
+def wait_until_send_time():
+    # GitHub porneste cron-ul cu ore de intarziere, asa ca workflow-ul porneste
+    # devreme si botul asteapta aici pana la ora exacta (ora Moldovei, cu DST)
+    if not SEND_AT:
+        return
+
+    hour, minute = map(int, SEND_AT.split(":"))
+    now = datetime.now(TIMEZONE)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    seconds = (target - now).total_seconds()
+
+    if seconds <= 0:
+        logging.info("Ora %s a trecut deja, trimit imediat", SEND_AT)
+        return
+
+    logging.info("Astept pana la %s (%d minute)", target, seconds // 60)
+    time.sleep(seconds)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s"
     )
 
+    wait_until_send_time()
+
     today = datetime.now(TIMEZONE)
     logging.info("Rulez botul pentru data locala: %s", today.date())
 
-    b_dates, b_prices = get_history(URLS["Benzina 95"])
-    m_dates, m_prices = get_history(URLS["Motorina"])
+    b_rows = get_table_rows(URLS["Benzina 95"])
+    m_rows = get_table_rows(URLS["Motorina"])
 
-    benzina = get_latest(URLS["Benzina 95"])
-    motorina = get_latest(URLS["Motorina"])
+    b_dates, b_prices = get_history(b_rows)
+    m_dates, m_prices = get_history(m_rows)
+
+    benzina = get_latest(b_rows)
+    motorina = get_latest(m_rows)
 
     chart = make_chart(
         b_dates,
