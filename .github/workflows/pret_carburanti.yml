@@ -8,7 +8,23 @@ on:
     - cron: '37 9 * * 1-5'
     - cron: '7 11 * * 1-5'
     - cron: '7 13 * * 1-5'
-  workflow_dispatch:         # rulare manuala din GitHub: trimite imediat
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Test scraping and chart generation without sending Telegram'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable detailed application logging'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONUNBUFFERED: '1'
+  MPLBACKEND: Agg
 
 jobs:
   send-prices:
@@ -43,10 +59,30 @@ jobs:
         if: steps.sent.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
 
-      - name: Rulare bot
+      - name: Runtime diagnostics
         if: steps.sent.outputs.cache-hit != 'true'
-        run: python bot.py
+        run: |
+          mkdir -p diagnostics
+          {
+            date -u
+            TZ=Europe/Chisinau date
+            python --version
+            python -m pip freeze
+            echo "Runner: $RUNNER_OS $RUNNER_ARCH"
+            echo "Event: $GITHUB_EVENT_NAME Run: $GITHUB_RUN_ID Attempt: $GITHUB_RUN_ATTEMPT"
+          } | tee diagnostics/runtime.txt
+
+      - name: Rulare bot
+        id: bot
+        if: steps.sent.outputs.cache-hit != 'true'
+        run: |
+          args=()
+          if [[ "$DRY_RUN" == 'true' ]]; then args+=(--dry-run); fi
+          if [[ "$DEBUG" == 'true' ]]; then args+=(--debug); fi
+          python bot.py "${args[@]}"
         env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          DEBUG: ${{ inputs.debug }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID:   ${{ secrets.CHAT_ID }}
           TIMEZONE:  Europe/Chisinau
@@ -61,3 +97,43 @@ jobs:
         with:
           path: sent.marker
           key: sent-${{ steps.today.outputs.date }}
+
+      - name: Network diagnostics on failure
+        if: failure()
+        timeout-minutes: 3
+        run: |
+          mkdir -p diagnostics
+          {
+            for host in anre.md www.anre.md api.telegram.org; do
+              echo "=== DNS: $host ==="
+              getent ahosts "$host" || true
+              echo "=== HTTPS: $host ==="
+              curl --connect-timeout 10 --max-time 20 --silent --show-error \
+                --output /dev/null --write-out 'HTTP=%{http_code} IP=%{remote_ip} connect=%{time_connect}s TLS=%{time_appconnect}s total=%{time_total}s\n' \
+                "https://$host/" || true
+            done
+          } 2>&1 | tee diagnostics/network.txt
+
+      - name: Workflow summary
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          CACHE_HIT: ${{ steps.sent.outputs.cache-hit }}
+          BOT_OUTCOME: ${{ steps.bot.outcome }}
+        run: |
+          {
+            echo "### Fuel price workflow"
+            echo "- Job: $JOB_STATUS"
+            echo "- Already sent today: ${CACHE_HIT:-false}"
+            echo "- Bot step: ${BOT_OUTCOME:-not started}"
+            echo "- Download the diagnostics artifact for logs, ANRE responses, chart and network checks."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diagnostics
+        if: always() && steps.sent.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostics/
+          retention-days: 14
+          if-no-files-found: warn

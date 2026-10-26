@@ -1,3 +1,10 @@
+import argparse
+import json
+import socket
+import sys
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
 import requests
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
@@ -9,9 +16,6 @@ import os
 import io
 import time
 import logging
-import urllib3
-
-urllib3.disable_warnings()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID   = os.environ.get("CHAT_ID", "")
@@ -19,8 +23,63 @@ TIMEZONE  = ZoneInfo(os.environ.get("TIMEZONE", "Europe/Chisinau"))
 # Ora locala (HH:MM) la care se trimite mesajul; gol = trimite imediat
 SEND_AT   = os.environ.get("SEND_AT", "").strip()
 REQUEST_TIMEOUT = 30
+CONNECT_TIMEOUT = 10
 FETCH_ATTEMPTS = 8
 FETCH_RETRY_DELAY = 45
+DIAGNOSTICS_DIR = Path(os.environ.get("DIAGNOSTICS_DIR", "diagnostics"))
+STAGE = "startup"
+
+
+class SafeFormatter(logging.Formatter):
+    def format(self, record):
+        # requests exceptions include the Telegram URL, which contains the token.
+        message = super().format(record)
+        for secret in (BOT_TOKEN, CHAT_ID):
+            if secret:
+                message = message.replace(secret, "[REDACTED]")
+        return message
+
+
+def setup_logging(debug=False):
+    DIAGNOSTICS_DIR.mkdir(parents=True, exist_ok=True)
+    formatter = SafeFormatter("%(asctime)s %(levelname)s %(message)s")
+    handlers = [logging.StreamHandler(), logging.FileHandler(
+        DIAGNOSTICS_DIR / "bot.log", encoding="utf-8")]
+    for handler in handlers:
+        handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.DEBUG if debug else logging.INFO,
+                        handlers=handlers, force=True)
+    # Avoid verbose library HTTP logs, especially Telegram URLs with credentials.
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+
+
+def set_stage(stage):
+    global STAGE
+    STAGE = stage
+    logging.info("Stage: %s", stage)
+
+
+def write_summary(status, detail):
+    text = f"Bot: {status}\nStage: {STAGE}\n{detail}\n"
+    for secret in (BOT_TOKEN, CHAT_ID):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    (DIAGNOSTICS_DIR / "summary.txt").write_text(text, encoding="utf-8")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as output:
+            output.write("\n```text\n" + text + "```\n")
+
+
+def log_dns(url):
+    host = urlsplit(url).hostname
+    try:
+        addresses = sorted({entry[4][0] for entry in socket.getaddrinfo(
+            host, 443, type=socket.SOCK_STREAM)})
+        logging.info("DNS %s: %s", host, addresses)
+    except OSError as error:
+        logging.error("DNS %s failed: %s", host, error)
 
 URLS = {
     "Benzina 95": "https://anre.md/benzina-95-3-2",
@@ -53,7 +112,7 @@ def parse_date(s):
 
     try:
         return datetime.strptime(s, "%d %m %Y")
-    except:
+    except ValueError:
         return None
 
 
@@ -69,43 +128,89 @@ def parse_price(s):
 def get_table_rows(url):
     # anre.md uneori raspunde cu o pagina fara tabel sau nu raspunde deloc
     for attempt in range(1, FETCH_ATTEMPTS + 1):
+        parts = urlsplit(url)
+        host = "www.anre.md" if attempt % 2 == 0 else parts.netloc
+        candidate = urlunsplit(parts._replace(netloc=host))
+        started = time.monotonic()
+        logging.info("ANRE attempt %d/%d: %s", attempt, FETCH_ATTEMPTS, candidate)
         try:
-            return fetch_table_rows(url)
+            return fetch_table_rows(candidate)
         except (requests.RequestException, RuntimeError) as e:
+            logging.warning("ANRE %s after %.1fs: %s", type(e).__name__,
+                            time.monotonic() - started, e)
             if attempt == FETCH_ATTEMPTS:
-                raise
+                log_dns(url)
+                log_dns(candidate)
+                raise RuntimeError(
+                    f"ANRE fetch failed after {FETCH_ATTEMPTS} attempts: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
             logging.warning(
                 "Incercarea %d/%d a esuat pentru %s: %s",
-                attempt, FETCH_ATTEMPTS, url, e
+                attempt, FETCH_ATTEMPTS, candidate, e
             )
             time.sleep(FETCH_RETRY_DELAY)
 
 
 def fetch_table_rows(url):
     headers = {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0 (compatible; ANREPriceBot/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "ro,en;q=0.8",
     }
 
+    started = time.monotonic()
     r = requests.get(
         url,
         headers=headers,
-        verify=False,
-        timeout=REQUEST_TIMEOUT
+        timeout=(CONNECT_TIMEOUT, REQUEST_TIMEOUT)
     )
+    logging.info("ANRE response: status=%s url=%s elapsed=%.2fs bytes=%d type=%s",
+                 r.status_code, r.url, time.monotonic() - started,
+                 len(r.content), r.headers.get("Content-Type", "unknown"))
+    DIAGNOSTICS_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{urlsplit(url).netloc}-{urlsplit(url).path.strip('/')}"
+    (DIAGNOSTICS_DIR / f"{filename}.html").write_text(r.text, encoding="utf-8")
+    (DIAGNOSTICS_DIR / f"{filename}.json").write_text(json.dumps({
+        "url": r.url, "status": r.status_code,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "bytes": len(r.content), "content_type": r.headers.get("Content-Type"),
+        "server": r.headers.get("Server"),
+        "retry_after": r.headers.get("Retry-After"),
+    }, indent=2), encoding="utf-8")
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "html.parser")
-    table = soup.find("table")
-
-    if table is None:
-        raise RuntimeError(f"Nu am gasit tabelul ANRE in pagina: {url}")
-
-    rows = [row for row in table.find_all("tr") if row.find("td")]
-
-    if len(rows) < 2:
-        raise RuntimeError(f"Tabelul ANRE nu are suficiente randuri: {url}")
-
-    return rows
+    logging.debug("ANRE page title=%r table_count=%d",
+                  soup.title.get_text(strip=True) if soup.title else None,
+                  len(soup.find_all("table")))
+    # Ignore layout tables and header rows that use td instead of th.
+    for table in soup.find_all("table"):
+        rows = []
+        for row in table.find_all("tr"):
+            cols = row.find_all("td")
+            if len(cols) < 2 or parse_date(cols[0].get_text(" ", strip=True)) is None:
+                continue
+            try:
+                price = parse_price(cols[-1].get_text(strip=True))
+                if not 0 < price < 1000:
+                    continue
+            except ValueError:
+                logging.debug("Skipping invalid ANRE price on date %r",
+                              cols[0].get_text(strip=True))
+                continue
+            rows.append(row)
+        if len(rows) >= 2:
+            rows.sort(key=lambda row: parse_date(row.find("td").get_text(" ", strip=True)),
+                      reverse=True)
+            logging.info("ANRE parsed %d prices; latest date=%s price=%s", len(rows),
+                         rows[0].find("td").get_text(strip=True),
+                         rows[0].find_all("td")[-1].get_text(strip=True))
+            return rows
+    title = soup.title.get_text(strip=True) if soup.title else "(no title)"
+    raise RuntimeError(f"ANRE page has fewer than two valid price rows: {url}; "
+                       f"title={title!r}; tables={len(soup.find_all('table'))}; "
+                       "see diagnostics HTML")
 
 
 def get_history(rows, limit=15):
@@ -314,6 +419,8 @@ def send_photo_telegram(image_buf, caption):
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
+    logging.info("Sending Telegram photo: bytes=%d caption_characters=%d",
+                 image_buf.getbuffer().nbytes, len(caption))
     response = requests.post(
         url,
         data={
@@ -364,26 +471,37 @@ def wait_until_send_time():
     time.sleep(seconds)
 
 
-def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s"
-    )
-
-    wait_until_send_time()
+def main(dry_run=False):
+    set_stage("configuration")
+    if not dry_run:
+        missing = [name for name, value in (("BOT_TOKEN", BOT_TOKEN), ("CHAT_ID", CHAT_ID))
+                   if not value.strip()]
+        if missing:
+            raise RuntimeError("Missing GitHub Actions secrets: " + ", ".join(missing))
+    logging.info("Python=%s timezone=%s send_at=%s dry_run=%s event=%s run_id=%s",
+                 sys.version.split()[0], TIMEZONE, SEND_AT or "immediate", dry_run,
+                 os.environ.get("GITHUB_EVENT_NAME", "local"),
+                 os.environ.get("GITHUB_RUN_ID", "local"))
+    if not dry_run:
+        set_stage("wait for send time")
+        wait_until_send_time()
 
     today = datetime.now(TIMEZONE)
     logging.info("Rulez botul pentru data locala: %s", today.date())
 
+    set_stage("fetch Benzina 95")
     b_rows = get_table_rows(URLS["Benzina 95"])
+    set_stage("fetch Motorina")
     m_rows = get_table_rows(URLS["Motorina"])
 
+    set_stage("parse prices")
     b_dates, b_prices = get_history(b_rows)
     m_dates, m_prices = get_history(m_rows)
 
     benzina = get_latest(b_rows)
     motorina = get_latest(m_rows)
 
+    set_stage("generate chart")
     chart = make_chart(
         b_dates,
         b_prices,
@@ -421,8 +539,28 @@ def main():
     caption += "\n_Sursa: anre.md/benzina-95-3-2_"
     caption += "\n_Sursa: anre.md/motorina-3-3_"
 
-    send_photo_telegram(chart, caption)
+    (DIAGNOSTICS_DIR / "chart.png").write_bytes(chart.getvalue())
+    (DIAGNOSTICS_DIR / "caption.txt").write_text(caption, encoding="utf-8")
+    if dry_run:
+        set_stage("dry run complete")
+    else:
+        set_stage("send Telegram photo")
+        send_photo_telegram(chart, caption)
+        set_stage("Telegram delivery confirmed")
+    write_summary("success", f"Benzina 95: {benzina['data']} / {benzina['pret']:.2f} lei\n"
+                  f"Motorina: {motorina['data']} / {motorina['pret']:.2f} lei\n"
+                  f"Dry run: {dry_run}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="ANRE fuel prices to Telegram")
+    parser.add_argument("--dry-run", action="store_true", help="Fetch and chart without sending to Telegram")
+    parser.add_argument("--debug", action="store_true", help="Enable application debug logging")
+    args = parser.parse_args()
+    setup_logging(args.debug)
+    try:
+        main(dry_run=args.dry_run)
+    except Exception as error:
+        logging.exception("Bot failed at stage: %s", STAGE)
+        write_summary("FAILED", f"{type(error).__name__}: {error}")
+        sys.exit(1)
