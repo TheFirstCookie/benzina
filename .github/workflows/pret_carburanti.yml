@@ -36,20 +36,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15, windows-latest]
+        runner: [ubuntu-latest]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 5
     steps:
       - name: Check ANRE HTTPS from runner network
         run: |
-          curl --fail --location --connect-timeout 10 --max-time 25 \
+          curl --fail --location --connect-timeout 10 --max-time 60 \
+            --header 'X-Respond-With: html' --header 'X-No-Cache: true' \
             --output anre.html --write-out 'HTTP=%{http_code} IP=%{remote_ip} total=%{time_total}s\n' \
-            https://anre.md/benzina-95-3-2
+            https://r.jina.ai/https://anre.md/benzina-95-3-2
+          head -c 200 anre.html
+          grep -o '<td>[^<]*' anre.html | head -n 20 || true
 
   send-prices:
-    # ANRE's HTTPS endpoint times out from the Ubuntu runner network.
-    # macOS uses a different hosted network; keep this job's scripts in bash.
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     timeout-minutes: 350
     concurrency:
       group: send-prices-${{ github.event_name }}
