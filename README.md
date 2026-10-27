@@ -2,7 +2,7 @@
 
 Fetches ANRE Moldova's petrol and diesel price history, generates the original blue/green line chart, and sends it to Telegram with daily price comparisons and Friday's weekly summary. Scheduled weekday runs prepare the report from 12:45 and send at **12:50 PM Europe/Chisinau**, automatically following winter/summer time; later runs send immediately. GitHub may delay scheduled starts, so several early starts/retries are retained. A daily cache marker skips subsequent successful scheduled deliveries. Manual runs send immediately and bypass that marker.
 
-The bot tries both official history hostnames over HTTPS, then the same pages over HTTP if HTTPS is unavailable. This preserves the publication dates, historical prices, chart and caption instead of switching to the current-cap API's different report. HTTP is an unencrypted fallback for these public tables; HTTPS certificate verification remains enabled. If all history attempts fail, the run fails without posting an incomplete or different report. No third-party relay or cached price snapshot is used.
+The bot tries both official history hostnames over HTTPS. If either fuel is unavailable, it fetches both publication histories from the [Logos Press ANRE history feed](https://logos-pres.md/wp-json/logos/v1/fuel-prices?days=30&lang=ro). This preserves the original line chart, publication dates, daily comparisons and Friday summary. Fallback reports retain the original ANRE source links and add `Date ANRE preluate prin logos-pres.md` to identify the intermediary. The feed's latest ten publications were compared with both official tables on October 27. No current-cap bar chart or cached price snapshot is used.
 
 ## Run and test
 
@@ -26,16 +26,17 @@ Open the run's **Summary** for the failed stage and error. Download its `diagnos
 - `runtime.txt`: Python and dependency versions, runner and run identifiers.
 - `network.txt`: after a failure, DNS and unauthenticated HTTPS checks for both ANRE hostnames and Telegram. A successful check later does not prove the earlier request worked.
 - `chart.png`, `caption.txt`, `summary.txt`: generated output and result, when reached.
+- `mirrored-history.json`: the ANRE publication-history response from Logos Press when direct ANRE access fails.
 
 `ConnectTimeout` means the runner could not establish the connection; `ReadTimeout` means the server did not return data in time; DNS errors indicate hostname resolution failure. HTTP 403/429 suggests access denial/rate limiting; 5xx suggests a server issue. Missing valid price rows points to page content; inspect the saved HTML. Telegram errors show its HTTP status and API description. Telegram tokens and chat IDs are redacted from application logs and summaries; Telegram responses are not stored as artifacts.
 
-Requests use a 10-second connection timeout and a 30-second read timeout. Four history attempts try `https://anre.md`, `https://www.anre.md`, `http://anre.md` and `http://www.anre.md`, with 5 seconds between attempts. Tables must contain at least two dated, valid prices. A failure of either fuel's history fails the run without claiming delivery. Failed sends do not create the scheduled delivery marker. Telegram sends are not retried automatically because an ambiguous timeout could otherwise cause duplicate messages.
+Requests use verified HTTPS, a 10-second connection timeout and a 30-second read timeout. Two direct history attempts alternate `anre.md` and `www.anre.md`, with 5 seconds between attempts. The mirror gets up to three attempts. Mirrored data must identify ANRE as its source, have a publication date no more than seven days old and never in the future, contain at least six valid prices per fuel, have matching publication dates, and agree with its advertised latest prices and daily changes. A failure of both direct history and the mirror fails the run without claiming delivery. Failed sends do not create the scheduled delivery marker. Telegram sends are not retried automatically because an ambiguous timeout could otherwise cause duplicate messages.
 
-Every workflow run that has not already delivered the daily message runs the unit tests before starting the bot. Tests cover history parsing, HTTPS-to-HTTP recovery, the exact original Friday caption, failure without partial reports, 12:50 local scheduling in winter/summer, chart generation, and Telegram failure handling.
+Every workflow run that has not already delivered the daily message runs the unit tests before starting the bot. Tests cover history parsing, mirror recovery and validation, the exact original Friday caption, failure without partial reports, 12:50 local scheduling in winter/summer, chart generation, and Telegram failure handling.
 
 ## October 27, 2026 investigation
 
-The earlier current-cap fallback described below changed the Telegram appearance and omitted comparisons. It has been removed. The bot now preserves the original history report and tries the official history pages over HTTP when HTTPS is unreachable.
+The earlier current-cap fallback described below changed the Telegram appearance and omitted comparisons. It has been removed. A [GitHub dry run](https://github.com/TheFirstCookie/benzina/actions/runs/40554263064) confirmed direct HTTP also times out, so the bot now uses the validated Logos Press publication-history feed when the official pages are unreachable.
 
 The [failed scheduled run](https://github.com/TheFirstCookie/benzina/actions/runs/40505115451) confirms connection timeouts to both ANRE history hostnames, which resolve to the same IP (`185.108.181.122`). The independent curl checks also timed out while Telegram was reachable. Both history pages returned valid tables from the local computer. This establishes a runner-to-ANRE connectivity issue; it does not identify which network or firewall drops the connection.
 

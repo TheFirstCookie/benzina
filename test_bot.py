@@ -1,8 +1,9 @@
 import io
+import json
 import logging
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,32 +64,92 @@ class BotTests(unittest.TestCase):
         wait.assert_not_called()
         send.assert_not_called()
 
+    @patch("bot.fetch_mirrored_history", side_effect=RuntimeError("history unavailable"))
     @patch("bot.send_photo_telegram")
     @patch("bot.get_table_rows", side_effect=RuntimeError("history unavailable"))
-    def test_history_failure_never_sends_a_different_report(self, fetch, send):
+    def test_history_failure_never_sends_a_different_report(self, fetch, send, mirror):
         with self.assertRaisesRegex(RuntimeError, "history unavailable"):
             bot.main(dry_run=True)
         send.assert_not_called()
         self.assertFalse((bot.DIAGNOSTICS_DIR / "summary.txt").exists())
 
+    @patch("bot.fetch_mirrored_history", side_effect=RuntimeError("diesel timeout"))
     @patch("bot.send_photo_telegram")
     @patch("bot.get_table_rows")
-    def test_diesel_failure_never_sends_partial_history(self, fetch, send):
+    def test_diesel_failure_never_sends_partial_history(self, fetch, send, mirror):
         fetch.side_effect = [self.history_rows([32.45, 32.72]), RuntimeError("diesel timeout")]
         with self.assertRaisesRegex(RuntimeError, "diesel timeout"):
             bot.main(dry_run=True)
         send.assert_not_called()
 
+    def mirrored_payload(self):
+        today = datetime.now(bot.TIMEZONE).date()
+        def product(prices):
+            return {"current": prices[0], "change": round(prices[0] - prices[1], 2),
+                    "history": [{"date": (today - timedelta(days=i)).isoformat(), "price": price}
+                                for i, price in enumerate(prices)]}
+        return {"source": {"name": "ANRE", "url": "https://anre.md/", "published_date": today.isoformat()},
+                "products": {"gasoline_95": product([32.45, 32.72, 32.99, 33.21, 33.41, 33.53]),
+                             "diesel": product([35.88, 35.90, 35.82, 35.57, 35.42, 35.22])}}
+
+    @patch("bot.send_photo_telegram")
+    @patch("bot.requests.get")
+    @patch("bot.get_table_rows")
+    def test_outage_of_either_fuel_restores_full_history_report_from_one_feed(self, fetch, get, send):
+        for failure in ([RuntimeError("petrol timeout")],
+                        [self.history_rows([1, 2]), RuntimeError("diesel timeout")]):
+            with self.subTest(failure=failure), patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
+                fetch.side_effect = failure
+                get.return_value = self.response(json.dumps(self.mirrored_payload()))
+                bot.main(dry_run=True)
+                caption = (bot.DIAGNOSTICS_DIR / "caption.txt").read_text(encoding="utf-8")
+                self.assertIn("Preturi Carburanti", caption)
+                self.assertIn("32.45 lei/litru", caption)
+                self.assertIn("35.88 lei/litru", caption)
+                self.assertIn("-0.27 lei fata de", caption)
+                self.assertIn("-0.02 lei fata de", caption)
+                self.assertIn("logos-pres.md", caption)
+                self.assertNotIn("Preturi in vigoare", caption)
+                self.assertTrue((bot.DIAGNOSTICS_DIR / "chart.png").read_bytes().startswith(b"\x89PNG"))
+        send.assert_not_called()
+
     @patch("bot.time.sleep")
-    @patch("bot.fetch_table_rows")
-    def test_https_outage_uses_original_history_over_http(self, fetch, sleep):
-        fetch.side_effect = [requests.ConnectTimeout("HTTPS blocked"),
-                             requests.ConnectTimeout("HTTPS blocked"), ["original rows"]]
-        self.assertEqual(bot.get_table_rows(bot.URLS["Benzina 95"]), ["original rows"])
-        self.assertEqual([call.args[0] for call in fetch.call_args_list], [
-            "https://anre.md/benzina-95-3-2", "https://www.anre.md/benzina-95-3-2",
-            "http://anre.md/benzina-95-3-2",
-        ])
+    @patch("bot.requests.get")
+    def test_mirror_retries_transient_network_errors(self, get, sleep):
+        get.side_effect = [requests.ConnectTimeout("timeout"), self.response(json.dumps(self.mirrored_payload()))]
+        rows = bot.fetch_mirrored_history()
+        self.assertEqual(bot.get_latest(rows[0])["pret"], 32.45)
+        self.assertEqual(get.call_args.args[0], bot.HISTORY_MIRROR_URL)
+        sleep.assert_called_once_with(bot.FETCH_RETRY_DELAY)
+
+    def test_mirror_rejects_stale_future_invalid_and_inconsistent_history(self):
+        def set_nested(payload, keys, value):
+            target = payload
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = value
+        today = datetime.now(bot.TIMEZONE).date()
+        invalid = [
+            (("source", "name"), "Other"),
+            (("source", "url"), "https://other.example/"),
+            (("source", "published_date"), (today - timedelta(days=8)).isoformat()),
+            (("source", "published_date"), (today + timedelta(days=1)).isoformat()),
+            (("products", "gasoline_95", "current"), 99),
+            (("products", "diesel", "change"), 99),
+            (("products", "gasoline_95", "history", 0, "price"), float("nan")),
+            (("products", "diesel", "history", 0, "price"), True),
+            (("products", "diesel", "history", 0, "price"), -1),
+            (("products", "diesel", "history", 0, "date"), (today + timedelta(days=1)).isoformat()),
+            (("products", "diesel", "history", 1, "date"), today.isoformat()),
+            (("products", "gasoline_95", "history"), []),
+            (("products", "diesel", "history", 5, "date"), (today - timedelta(days=10)).isoformat()),
+        ]
+        for keys, value in invalid:
+            with self.subTest(keys=keys, value=value):
+                payload = self.mirrored_payload()
+                set_nested(payload, keys, value)
+                with self.assertRaises(ValueError):
+                    bot.parse_mirrored_history(payload)
 
     @patch("bot.send_photo_telegram")
     @patch("bot.wait_until_send_time")

@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import socket
 import sys
 from pathlib import Path
@@ -24,8 +25,10 @@ TIMEZONE  = ZoneInfo(os.environ.get("TIMEZONE", "Europe/Chisinau"))
 SEND_AT   = os.environ.get("SEND_AT", "").strip()
 REQUEST_TIMEOUT = 30
 CONNECT_TIMEOUT = 10
-FETCH_ATTEMPTS = 4
+FETCH_ATTEMPTS = 2
 FETCH_RETRY_DELAY = 5
+HISTORY_MIRROR_URL = "https://logos-pres.md/wp-json/logos/v1/fuel-prices?days=30&lang=ro"
+MIRROR_ATTEMPTS = 3
 DIAGNOSTICS_DIR = Path(os.environ.get("DIAGNOSTICS_DIR", "diagnostics"))
 STAGE = "startup"
 
@@ -130,10 +133,7 @@ def get_table_rows(url):
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         parts = urlsplit(url)
         host = "www.anre.md" if attempt % 2 == 0 else parts.netloc
-        # ANRE also serves the original tables on port 80. Some runner networks
-        # cannot reach its HTTPS port; keep the same data and report in that case.
-        scheme = parts.scheme if attempt <= 2 else "http"
-        candidate = urlunsplit(parts._replace(netloc=host, scheme=scheme))
+        candidate = urlunsplit(parts._replace(netloc=host))
         started = time.monotonic()
         logging.info("ANRE attempt %d/%d: %s", attempt, FETCH_ATTEMPTS, candidate)
         try:
@@ -231,6 +231,71 @@ def get_history(rows, limit=15):
             prices.append(p)
 
     return list(reversed(dates)), list(reversed(prices))
+
+
+def parse_mirrored_history(payload):
+    """Validate ANRE publication history republished by Logos Press."""
+    source = payload["source"]
+    if source["name"] != "ANRE" or source["url"] not in ("https://anre.md", "https://anre.md/"):
+        raise ValueError("History feed does not identify the official ANRE source")
+    latest = datetime.strptime(source["published_date"], "%Y-%m-%d")
+    age = (datetime.now(TIMEZONE).date() - latest.date()).days
+    if not 0 <= age <= 7:
+        raise ValueError("Mirrored ANRE publication date is stale or future")
+    histories = []
+    for key in ("gasoline_95", "diesel"):
+        product = payload["products"][key]
+        points = {}
+        for point in product["history"]:
+            date = datetime.strptime(point["date"], "%Y-%m-%d")
+            price = point["price"]
+            if (isinstance(price, bool) or not isinstance(price, (int, float))
+                    or not 0 < price < 1000 or not math.isfinite(price)):
+                raise ValueError(f"Invalid mirrored ANRE price for {key}")
+            if date > latest or date in points:
+                raise ValueError("Future or duplicate date in mirrored ANRE history")
+            points[date] = price
+        dates = sorted(points, reverse=True)
+        if len(dates) < 6 or dates[0] != latest:
+            raise ValueError("Incomplete mirrored ANRE publication history")
+        if (points[latest] != product["current"]
+                or round(points[dates[0]] - points[dates[1]], 2) != product["change"]):
+            raise ValueError("Mirrored ANRE current price or daily change disagrees with history")
+        # Match the ten publications displayed in ANRE's own history tables.
+        rows = BeautifulSoup("<table></table>", "html.parser")
+        for date in dates[:10]:
+            row = rows.new_tag("tr")
+            for value in (f"{date.day} {list(LUNI)[date.month - 1]} {date.year}",
+                          f"{points[date]:.2f}"):
+                cell = rows.new_tag("td")
+                cell.string = value
+                row.append(cell)
+            rows.table.append(row)
+        histories.append(rows.find_all("tr"))
+    if ([row.find("td").text for row in histories[0]]
+            != [row.find("td").text for row in histories[1]]):
+        raise ValueError("Mirrored fuel histories have different publication dates")
+    return histories
+
+
+def fetch_mirrored_history():
+    for attempt in range(1, MIRROR_ATTEMPTS + 1):
+        logging.info("ANRE history mirror attempt %d/%d: %s", attempt,
+                     MIRROR_ATTEMPTS, HISTORY_MIRROR_URL)
+        try:
+            response = requests.get(HISTORY_MIRROR_URL,
+                                    timeout=(CONNECT_TIMEOUT, REQUEST_TIMEOUT))
+            response.raise_for_status()
+            DIAGNOSTICS_DIR.mkdir(parents=True, exist_ok=True)
+            (DIAGNOSTICS_DIR / "mirrored-history.json").write_text(response.text, encoding="utf-8")
+            histories = parse_mirrored_history(response.json())
+            logging.info("Validated mirrored ANRE history: %s", get_latest(histories[0])["data"])
+            return histories
+        except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+            logging.warning("ANRE history mirror failed: %s", error)
+            if attempt == MIRROR_ATTEMPTS:
+                raise RuntimeError(f"ANRE history mirror failed after {attempt} attempts: {error}") from error
+            time.sleep(FETCH_RETRY_DELAY)
 
 
 def complete_report(chart, caption, detail, dry_run):
@@ -506,10 +571,17 @@ def main(dry_run=False):
     today = datetime.now(TIMEZONE)
     logging.info("Rulez botul pentru data locala: %s", today.date())
 
-    set_stage("fetch Benzina 95")
-    b_rows = get_table_rows(URLS["Benzina 95"])
-    set_stage("fetch Motorina")
-    m_rows = get_table_rows(URLS["Motorina"])
+    mirrored = False
+    try:
+        set_stage("fetch Benzina 95")
+        b_rows = get_table_rows(URLS["Benzina 95"])
+        set_stage("fetch Motorina")
+        m_rows = get_table_rows(URLS["Motorina"])
+    except (requests.RequestException, RuntimeError) as error:
+        logging.warning("Direct ANRE history unavailable; trying publication-history mirror: %s", error)
+        set_stage("fetch mirrored ANRE publication history")
+        b_rows, m_rows = fetch_mirrored_history()
+        mirrored = True
 
     set_stage("parse prices")
     b_dates, b_prices = get_history(b_rows)
@@ -555,8 +627,11 @@ def main(dry_run=False):
 
     caption += "\n_Sursa: anre.md/benzina-95-3-2_"
     caption += "\n_Sursa: anre.md/motorina-3-3_"
+    if mirrored:
+        caption += "\n_Date ANRE preluate prin logos-pres.md_"
 
     complete_report(chart, caption,
+                    f"Source: {HISTORY_MIRROR_URL if mirrored else 'ANRE direct'}\n"
                     f"Benzina 95: {benzina['data']} / {benzina['pret']:.2f} lei\n"
                     f"Motorina: {motorina['data']} / {motorina['pret']:.2f} lei", dry_run)
 

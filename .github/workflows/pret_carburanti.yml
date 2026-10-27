@@ -107,7 +107,7 @@ jobs:
         run: |
           mkdir -p diagnostics
           {
-            for host in anre.md www.anre.md api.ecarburanti.anre.md api.telegram.org; do
+            for host in anre.md www.anre.md logos-pres.md api.telegram.org; do
               echo "=== DNS: $host ==="
               getent ahosts "$host" || true
               echo "=== HTTPS: $host ==="
