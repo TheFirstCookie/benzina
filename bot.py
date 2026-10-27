@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.ticker import MultipleLocator
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import os
 import io
@@ -24,11 +24,8 @@ TIMEZONE  = ZoneInfo(os.environ.get("TIMEZONE", "Europe/Chisinau"))
 SEND_AT   = os.environ.get("SEND_AT", "").strip()
 REQUEST_TIMEOUT = 30
 CONNECT_TIMEOUT = 10
-FETCH_ATTEMPTS = 2
+FETCH_ATTEMPTS = 4
 FETCH_RETRY_DELAY = 5
-CURRENT_PRICES_URL = "https://api.ecarburanti.anre.md/public/plafon/"
-CURRENT_PRICE_ATTEMPTS = 3
-MAX_CURRENT_PRICE_AGE_DAYS = 7
 DIAGNOSTICS_DIR = Path(os.environ.get("DIAGNOSTICS_DIR", "diagnostics"))
 STAGE = "startup"
 
@@ -133,7 +130,10 @@ def get_table_rows(url):
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         parts = urlsplit(url)
         host = "www.anre.md" if attempt % 2 == 0 else parts.netloc
-        candidate = urlunsplit(parts._replace(netloc=host))
+        # ANRE also serves the original tables on port 80. Some runner networks
+        # cannot reach its HTTPS port; keep the same data and report in that case.
+        scheme = parts.scheme if attempt <= 2 else "http"
+        candidate = urlunsplit(parts._replace(netloc=host, scheme=scheme))
         started = time.monotonic()
         logging.info("ANRE attempt %d/%d: %s", attempt, FETCH_ATTEMPTS, candidate)
         try:
@@ -233,92 +233,14 @@ def get_history(rows, limit=15):
     return list(reversed(dates)), list(reversed(prices))
 
 
-def fetch_current_prices():
-    """Official e-carburanți caps currently in force, not publication history."""
-    for attempt in range(1, CURRENT_PRICE_ATTEMPTS + 1):
-        logging.info("ANRE current-price attempt %d/%d: %s", attempt,
-                     CURRENT_PRICE_ATTEMPTS, CURRENT_PRICES_URL)
-        try:
-            response = requests.get(CURRENT_PRICES_URL,
-                                    timeout=(CONNECT_TIMEOUT, REQUEST_TIMEOUT))
-            logging.info("ANRE current-price response: status=%s bytes=%d",
-                         response.status_code, len(response.content))
-            DIAGNOSTICS_DIR.mkdir(parents=True, exist_ok=True)
-            (DIAGNOSTICS_DIR / "current-prices-response.json").write_text(
-                response.text, encoding="utf-8")
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("Expected an ANRE price object")
-            price_date = datetime.strptime(payload["date"], "%Y-%m-%d").date()
-            age = (datetime.now(TIMEZONE).date() - price_date).days
-            if not 0 <= age <= MAX_CURRENT_PRICE_AGE_DAYS:
-                raise ValueError(f"ANRE current-price date is stale or future: {price_date}")
-            for key in ("b_pc", "m_pc"):
-                price = payload[key]
-                if isinstance(price, bool) or not isinstance(price, (int, float)) or not 0 < price < 1000:
-                    raise ValueError(f"Invalid ANRE current price: {key}={price!r}")
-            logging.info("ANRE caps in force: date=%s Benzina95=%.2f Motorina=%.2f",
-                         price_date, payload["b_pc"], payload["m_pc"])
-            return payload
-        except (requests.RequestException, ValueError, KeyError, TypeError) as error:
-            logging.warning("ANRE current-price fetch failed: %s: %s",
-                            type(error).__name__, error)
-            if attempt == CURRENT_PRICE_ATTEMPTS:
-                raise RuntimeError(
-                    f"Official ANRE current-price fallback failed after {attempt} attempts: {error}"
-                ) from error
-            time.sleep(FETCH_RETRY_DELAY)
-
-
-def make_current_chart(prices):
-    fig, ax = plt.subplots(figsize=(10, 5))
-    fig.patch.set_facecolor("#1a1a2e")
-    ax.set_facecolor("#16213e")
-    bars = ax.bar(["Benzina 95", "Motorina"], [prices["b_pc"], prices["m_pc"]],
-                  color=["#4fc3f7", "#81c784"], width=0.5)
-    ax.bar_label(bars, fmt="%.2f lei/l", color="white", padding=8, fontsize=14)
-    ax.set_ylim(0, max(prices["b_pc"], prices["m_pc"]) * 1.2)
-    ax.set_ylabel("Pret maxim (lei/litru)", color="#aaaaaa")
-    ax.set_title(f"Preturi in vigoare — ANRE Moldova — {prices['date']}",
-                 color="white", pad=15)
-    ax.tick_params(colors="#aaaaaa")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#333355")
-    buf = io.BytesIO()
-    fig.tight_layout()
-    fig.savefig(buf, format="png", dpi=130, facecolor=fig.get_facecolor())
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
-
-def report_current_prices(dry_run):
-    set_stage("fetch current ANRE price caps")
-    prices = fetch_current_prices()
-    set_stage("generate current price chart")
-    chart = make_current_chart(prices)
-    date = datetime.strptime(prices["date"], "%Y-%m-%d").strftime("%d.%m.%Y")
-    caption = (
-        f"⛽ *Preturi in vigoare — ANRE Moldova*\n"
-        f"📅 Data ANRE: {date}\n\n"
-        f"*Benzina 95*\n💰 Pret maxim: `{prices['b_pc']:.2f} lei/litru`\n\n"
-        f"*Motorina*\n💰 Pret maxim: `{prices['m_pc']:.2f} lei/litru`\n\n"
-        "_Sursa: ecarburanti.anre.md_"
-    )
-    complete_report(chart, caption,
-                    f"Source: {CURRENT_PRICES_URL}\n"
-                    f"Prices currently in force (not publication history): {prices['date']}\n"
-                    f"Benzina 95: {prices['b_pc']:.2f} lei\n"
-                    f"Motorina: {prices['m_pc']:.2f} lei", dry_run)
-
-
 def complete_report(chart, caption, detail, dry_run):
     (DIAGNOSTICS_DIR / "chart.png").write_bytes(chart.getvalue())
     (DIAGNOSTICS_DIR / "caption.txt").write_text(caption, encoding="utf-8")
     if dry_run:
         set_stage("dry run complete")
     else:
+        set_stage("wait for send time")
+        wait_until_send_time()
         set_stage("send Telegram photo")
         send_photo_telegram(chart, caption)
         set_stage("Telegram delivery confirmed")
@@ -547,7 +469,7 @@ def send_photo_telegram(image_buf, caption):
     )
 
 
-def wait_until_send_time():
+def wait_until_send_time(lead_seconds=0):
     # GitHub porneste cron-ul cu ore de intarziere, asa ca workflow-ul porneste
     # devreme si botul asteapta aici pana la ora exacta (ora Moldovei, cu DST)
     if not SEND_AT:
@@ -555,7 +477,7 @@ def wait_until_send_time():
 
     hour, minute = map(int, SEND_AT.split(":"))
     now = datetime.now(TIMEZONE)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0) - timedelta(seconds=lead_seconds)
     seconds = (target - now).total_seconds()
 
     if seconds <= 0:
@@ -578,21 +500,16 @@ def main(dry_run=False):
                  os.environ.get("GITHUB_EVENT_NAME", "local"),
                  os.environ.get("GITHUB_RUN_ID", "local"))
     if not dry_run:
-        set_stage("wait for send time")
-        wait_until_send_time()
+        set_stage("wait for price preparation time")
+        wait_until_send_time(lead_seconds=300)
 
     today = datetime.now(TIMEZONE)
     logging.info("Rulez botul pentru data locala: %s", today.date())
 
-    try:
-        set_stage("fetch Benzina 95")
-        b_rows = get_table_rows(URLS["Benzina 95"])
-        set_stage("fetch Motorina")
-        m_rows = get_table_rows(URLS["Motorina"])
-    except (requests.RequestException, RuntimeError) as error:
-        logging.warning("ANRE history unavailable; trying official caps currently in force: %s", error)
-        report_current_prices(dry_run)
-        return
+    set_stage("fetch Benzina 95")
+    b_rows = get_table_rows(URLS["Benzina 95"])
+    set_stage("fetch Motorina")
+    m_rows = get_table_rows(URLS["Motorina"])
 
     set_stage("parse prices")
     b_dates, b_prices = get_history(b_rows)
