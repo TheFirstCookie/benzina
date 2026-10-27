@@ -26,9 +26,15 @@ env:
   PYTHONUNBUFFERED: '1'
   MPLBACKEND: Agg
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   send-prices:
-    runs-on: ubuntu-latest
+    # ANRE's HTTPS endpoint times out from the Ubuntu runner network.
+    # macOS uses a different hosted network; keep this job's scripts in bash.
+    runs-on: macos-15
     timeout-minutes: 350
     concurrency:
       group: send-prices-${{ github.event_name }}
@@ -58,6 +64,10 @@ jobs:
       - name: Instalare dependențe
         if: steps.sent.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
+
+      - name: Test bot
+        if: steps.sent.outputs.cache-hit != 'true'
+        run: python -m unittest -v
 
       - name: Runtime diagnostics
         if: steps.sent.outputs.cache-hit != 'true'
@@ -106,7 +116,7 @@ jobs:
           {
             for host in anre.md www.anre.md api.telegram.org; do
               echo "=== DNS: $host ==="
-              getent ahosts "$host" || true
+              python -c 'import socket, sys; print("\n".join(sorted({entry[4][0] for entry in socket.getaddrinfo(sys.argv[1], 443, type=socket.SOCK_STREAM)})))' "$host" || true
               echo "=== HTTPS: $host ==="
               curl --connect-timeout 10 --max-time 20 --silent --show-error \
                 --output /dev/null --write-out 'HTTP=%{http_code} IP=%{remote_ip} connect=%{time_connect}s TLS=%{time_appconnect}s total=%{time_total}s\n' \
