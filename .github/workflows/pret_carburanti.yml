@@ -59,6 +59,10 @@ jobs:
         if: steps.sent.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
 
+      - name: Test bot
+        if: steps.sent.outputs.cache-hit != 'true'
+        run: python -m unittest -v
+
       - name: Runtime diagnostics
         if: steps.sent.outputs.cache-hit != 'true'
         run: |
@@ -104,7 +108,7 @@ jobs:
         run: |
           mkdir -p diagnostics
           {
-            for host in anre.md www.anre.md api.telegram.org; do
+            for host in anre.md www.anre.md api.ecarburanti.anre.md api.telegram.org; do
               echo "=== DNS: $host ==="
               getent ahosts "$host" || true
               echo "=== HTTPS: $host ==="
