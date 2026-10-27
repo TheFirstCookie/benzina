@@ -26,36 +26,7 @@ env:
   PYTHONUNBUFFERED: '1'
   MPLBACKEND: Agg
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
-  check-runner-network:
-    if: inputs.dry_run
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-latest]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 5
-    steps:
-      - name: Check ANRE HTTPS from runner network
-        run: |
-          for url in \
-            'https://r.jina.ai/https://anre.md/benzina-95-3-2' \
-            'https://r.jina.ai/http://anre.md/benzina-95-3-2' \
-            'https://api.ecarburanti.anre.md/public/plafon/' \
-            'https://api.codetabs.com/v1/proxy?quest=https%3A%2F%2Fanre.md%2Fbenzina-95-3-2'; do
-            echo "$url"
-            curl --location --connect-timeout 10 --max-time 45 --silent --show-error \
-              --header 'X-Return-Format: html' --header 'X-No-Cache: true' \
-              --output anre.html --write-out 'HTTP=%{http_code} total=%{time_total}s\n' \
-              "$url" || true
-            head -c 250 anre.html || true
-            grep -o '<td>[^<]*' anre.html | head -n 20 || true
-          done
-
   send-prices:
     runs-on: ubuntu-latest
     timeout-minutes: 350
@@ -137,9 +108,9 @@ jobs:
         run: |
           mkdir -p diagnostics
           {
-            for host in anre.md www.anre.md api.telegram.org; do
+            for host in anre.md www.anre.md api.ecarburanti.anre.md api.telegram.org; do
               echo "=== DNS: $host ==="
-              python -c 'import socket, sys; print("\n".join(sorted({entry[4][0] for entry in socket.getaddrinfo(sys.argv[1], 443, type=socket.SOCK_STREAM)})))' "$host" || true
+              getent ahosts "$host" || true
               echo "=== HTTPS: $host ==="
               curl --connect-timeout 10 --max-time 20 --silent --show-error \
                 --output /dev/null --write-out 'HTTP=%{http_code} IP=%{remote_ip} connect=%{time_connect}s TLS=%{time_appconnect}s total=%{time_total}s\n' \
