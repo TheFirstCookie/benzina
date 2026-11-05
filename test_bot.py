@@ -37,11 +37,7 @@ class BotTests(unittest.TestCase):
             day -= timedelta(days=1)
             while day.weekday() >= 5:
                 day -= timedelta(days=1)
-        html = "<table>" + "".join(
-            f"<tr><td>{date}</td><td>{price}</td></tr>"
-            for date, price in zip(dates, prices)
-        ) + "</table>"
-        return bot.BeautifulSoup(html, "html.parser").find_all("tr")
+        return [bot.PricePoint(bot.parse_date(date), price) for date, price in zip(dates, prices)]
 
     @patch("bot.send_photo_telegram")
     @patch("bot.wait_until_send_time")

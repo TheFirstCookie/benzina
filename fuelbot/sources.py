@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from .config import (CONNECT_TIMEOUT, REQUEST_TIMEOUT, FETCH_ATTEMPTS,
                      FETCH_RETRY_DELAY, HISTORY_MIRROR_URL, MIRROR_ATTEMPTS)
 from .parsing import parse_date, parse_price
+from .models import PricePoint
 
 def log_dns(url):
     host = urlsplit(url).hostname
@@ -68,13 +69,12 @@ def fetch_table_rows(url, diagnostics_dir):
                 logging.debug("Skipping invalid ANRE price on date %r",
                               cols[0].get_text(strip=True))
                 continue
-            rows.append(row)
+            rows.append(PricePoint(parse_date(cols[0].get_text(" ", strip=True)), price))
         if len(rows) >= 2:
-            rows.sort(key=lambda row: parse_date(row.find("td").get_text(" ", strip=True)),
+            rows.sort(key=lambda point: point.date,
                       reverse=True)
             logging.info("ANRE parsed %d prices; latest date=%s price=%s", len(rows),
-                         rows[0].find("td").get_text(strip=True),
-                         rows[0].find_all("td")[-1].get_text(strip=True))
+                         rows[0].date.date(), rows[0].price)
             return rows
     title = soup.title.get_text(strip=True) if soup.title else "(no title)"
     raise RuntimeError(f"ANRE page has fewer than two valid price rows: {url}; "

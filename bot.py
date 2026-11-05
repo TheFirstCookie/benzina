@@ -33,6 +33,7 @@ STAGE = "startup"
 
 
 from fuelbot import sources
+from fuelbot.models import PricePoint, FuelHistory
 from fuelbot.parsing import LUNI, parse_date, parse_price
 
 
@@ -105,21 +106,9 @@ def write_summary(status, detail):
 
 
 
-def get_history(rows, limit=15):
-    dates = []
-    prices = []
-
-    for row in rows[:limit]:
-        cols = row.find_all("td")
-
-        d = parse_date(cols[0].text)
-        p = parse_price(cols[-1].text)
-
-        if d:
-            dates.append(d)
-            prices.append(p)
-
-    return list(reversed(dates)), list(reversed(prices))
+def get_history(points, limit=15):
+    selected = list(reversed(points[:limit]))
+    return [point.date for point in selected], [point.price for point in selected]
 
 
 def parse_mirrored_history(payload):
@@ -150,19 +139,8 @@ def parse_mirrored_history(payload):
         if (points[latest] != product["current"]
                 or round(points[dates[0]] - points[dates[1]], 2) != product["change"]):
             raise ValueError("Mirrored ANRE current price or daily change disagrees with history")
-        # Match the ten publications displayed in ANRE's own history tables.
-        rows = BeautifulSoup("<table></table>", "html.parser")
-        for date in dates[:10]:
-            row = rows.new_tag("tr")
-            for value in (f"{date.day} {list(LUNI)[date.month - 1]} {date.year}",
-                          f"{points[date]:.2f}"):
-                cell = rows.new_tag("td")
-                cell.string = value
-                row.append(cell)
-            rows.table.append(row)
-        histories.append(rows.find_all("tr"))
-    if ([row.find("td").text for row in histories[0]]
-            != [row.find("td").text for row in histories[1]]):
+        histories.append([PricePoint(date, points[date]) for date in dates[:10]])
+    if ([point.date for point in histories[0]] != [point.date for point in histories[1]]):
         raise ValueError("Mirrored fuel histories have different publication dates")
     return histories
 
@@ -175,8 +153,7 @@ def expected_publication_date():
 
 
 def validate_histories(histories):
-    dates = [[parse_date(row.find("td").get_text(" ", strip=True))
-              for row in rows] for rows in histories]
+    dates = [[point.date for point in points] for points in histories]
     if any(len(items) < 2 or items[0].date() != expected_publication_date()
            for items in dates):
         raise ValueError(f"ANRE history is stale or future; expected publication "
@@ -218,19 +195,18 @@ def complete_report(chart, caption, detail, dry_run):
     write_summary("success", f"{detail}\nDry run: {dry_run}")
 
 
-def get_latest(rows):
-    azi =rows[0].find_all("td")
-    ultima_data = rows[1].find_all("td")
-
-    pret_azi = parse_price(azi[-1].text)
-    pret_ultima_data = parse_price(ultima_data[-1].text)
-
+def get_latest(points):
+    current, previous = points[:2]
     return {
-        "data": azi[0].text.strip(),
-        "pret": pret_azi,
-        "diferenta": round(pret_azi - pret_ultima_data, 2),
-        "data_comparatie": ultima_data[0].text.strip(),
+        "data": format_date(current.date),
+        "pret": current.price,
+        "diferenta": round(current.price - previous.price, 2),
+        "data_comparatie": format_date(previous.date),
     }
+
+
+def format_date(date):
+    return f"{date.day} {list(LUNI)[date.month - 1]} {date.year}"
 
 
 def get_weekly_change(dates, prices):
