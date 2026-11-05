@@ -225,7 +225,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(fetch.call_args_list[1].args[0], "https://www.anre.md/benzina-95-3-2")
         sleep.assert_called_once_with(bot.FETCH_RETRY_DELAY)
 
-    @patch("bot.log_dns")
+    @patch("fuelbot.sources.log_dns")
     @patch("bot.time.sleep")
     @patch("bot.fetch_table_rows", side_effect=requests.ReadTimeout("read timed out"))
     def test_exhausted_retries_report_failure_and_dns(self, fetch, sleep, dns):
