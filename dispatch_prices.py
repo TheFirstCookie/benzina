@@ -8,7 +8,7 @@ import subprocess
 
 import requests
 
-import bot
+import fuelbot.app as bot
 
 
 API = "https://api.github.com/repos/TheFirstCookie/benzina"

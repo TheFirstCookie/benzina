@@ -13,3 +13,5 @@ Each numbered step is verified before its commit is pushed. Dry runs never post 
 5. **Reports:** chart/caption creation is isolated from HTTP and sending in `fuelbot/reports.py`; exact Friday caption regression and real PNG generation pass.
 
 6. **Telegram:** isolated client returns confirmed message IDs and distinguishes explicit rejection from ambiguous delivery, with no automatic resend after a timeout; response/timeout tests pass.
+
+7. **Scheduling:** `fuelbot/scheduler.py` owns preparation/send waits; reporting workers execute immediately and `bot.py` is a CLI entry point. Scheduled ordering, late starts, winter/summer and dry-run no-wait tests pass.

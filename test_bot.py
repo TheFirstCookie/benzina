@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import requests
 
-import bot
+import fuelbot.app as bot
 
 
 class BotTests(unittest.TestCase):
@@ -39,14 +39,14 @@ class BotTests(unittest.TestCase):
                 day -= timedelta(days=1)
         return [bot.PricePoint(bot.parse_date(date), price) for date, price in zip(dates, prices)]
 
-    @patch("bot.send_photo_telegram")
-    @patch("bot.wait_until_send_time")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram")
+    @patch("fuelbot.scheduler.wait_until_send_time")
+    @patch("fuelbot.app.get_table_rows")
     def test_original_friday_report_matches_telegram_caption(self, fetch, wait, send):
         published = datetime(2026, 10, 23).date()
         fetch.side_effect = [self.history_rows([32.45, 32.72, 32.99, 33.21, 33.41, 33.53], published),
                              self.history_rows([35.88, 35.90, 35.82, 35.57, 35.42, 35.22], published)]
-        with patch("bot.datetime", wraps=datetime) as clock, \
+        with patch("fuelbot.app.datetime", wraps=datetime) as clock, \
                 patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
             clock.now.return_value = datetime(2026, 10, 23, 12, 50, tzinfo=bot.TIMEZONE)
             bot.main(dry_run=True)
@@ -66,18 +66,18 @@ class BotTests(unittest.TestCase):
         wait.assert_not_called()
         send.assert_not_called()
 
-    @patch("bot.fetch_mirrored_history", side_effect=RuntimeError("history unavailable"))
-    @patch("bot.send_photo_telegram")
-    @patch("bot.get_table_rows", side_effect=RuntimeError("history unavailable"))
+    @patch("fuelbot.app.fetch_mirrored_history", side_effect=RuntimeError("history unavailable"))
+    @patch("fuelbot.app.send_photo_telegram")
+    @patch("fuelbot.app.get_table_rows", side_effect=RuntimeError("history unavailable"))
     def test_history_failure_never_sends_a_different_report(self, fetch, send, mirror):
         with self.assertRaisesRegex(RuntimeError, "history unavailable"):
             bot.main(dry_run=True)
         send.assert_not_called()
         self.assertFalse((bot.DIAGNOSTICS_DIR / "summary.txt").exists())
 
-    @patch("bot.fetch_mirrored_history", side_effect=RuntimeError("diesel timeout"))
-    @patch("bot.send_photo_telegram")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.fetch_mirrored_history", side_effect=RuntimeError("diesel timeout"))
+    @patch("fuelbot.app.send_photo_telegram")
+    @patch("fuelbot.app.get_table_rows")
     def test_diesel_failure_never_sends_partial_history(self, fetch, send, mirror):
         fetch.side_effect = [self.history_rows([32.45, 32.72]), RuntimeError("diesel timeout")]
         with self.assertRaisesRegex(RuntimeError, "diesel timeout"):
@@ -94,9 +94,9 @@ class BotTests(unittest.TestCase):
                 "products": {"gasoline_95": product([32.45, 32.72, 32.99, 33.21, 33.41, 33.53]),
                              "diesel": product([35.88, 35.90, 35.82, 35.57, 35.42, 35.22])}}
 
-    @patch("bot.send_photo_telegram")
-    @patch("bot.requests.get")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram")
+    @patch("fuelbot.app.requests.get")
+    @patch("fuelbot.app.get_table_rows")
     def test_outage_of_either_fuel_restores_full_history_report_from_one_feed(self, fetch, get, send):
         for failure in ([RuntimeError("petrol timeout")],
                         [self.history_rows([1, 2]), RuntimeError("diesel timeout")]):
@@ -115,8 +115,8 @@ class BotTests(unittest.TestCase):
                 self.assertTrue((bot.DIAGNOSTICS_DIR / "chart.png").read_bytes().startswith(b"\x89PNG"))
         send.assert_not_called()
 
-    @patch("bot.time.sleep")
-    @patch("bot.requests.get")
+    @patch("fuelbot.app.time.sleep")
+    @patch("fuelbot.app.requests.get")
     def test_mirror_retries_transient_network_errors(self, get, sleep):
         get.side_effect = [requests.ConnectTimeout("timeout"), self.response(json.dumps(self.mirrored_payload()))]
         rows = bot.fetch_mirrored_history()
@@ -154,24 +154,24 @@ class BotTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     bot.parse_mirrored_history(payload)
 
-    @patch("bot.send_photo_telegram")
-    @patch("bot.wait_until_send_time")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram")
+    @patch("fuelbot.scheduler.wait_until_send_time")
+    @patch("fuelbot.app.get_table_rows")
     def test_delivery_waits_after_preparation_and_sends_once(self, fetch, wait, send):
         fetch.side_effect = [self.history_rows([32.45, 32.72]), self.history_rows([35.88, 35.90])]
         events = []
-        wait.side_effect = lambda **kw: events.append(("wait", kw))
+        wait.side_effect = lambda *args, **kw: events.append(("wait", kw))
         send.side_effect = lambda *args: events.append(("send", {}))
         with patch.object(bot, "BOT_TOKEN", "fake-token"), patch.object(bot, "CHAT_ID", "123"), \
                 patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
-            bot.main()
+            bot.main(scheduled=True)
         self.assertEqual(events, [("wait", {"lead_seconds": 300}), ("wait", {}), ("send", {})])
         send.assert_called_once()
         self.assertEqual(bot.STAGE, "Telegram delivery confirmed")
 
-    @patch("bot.send_photo_telegram", side_effect=requests.ReadTimeout("ambiguous Telegram timeout"))
-    @patch("bot.wait_until_send_time")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram", side_effect=requests.ReadTimeout("ambiguous Telegram timeout"))
+    @patch("fuelbot.scheduler.wait_until_send_time")
+    @patch("fuelbot.app.get_table_rows")
     def test_telegram_timeout_does_not_claim_success_or_retry(self, fetch, wait, send):
         fetch.side_effect = [self.history_rows([32.45, 32.72]), self.history_rows([35.88, 35.90])]
         with patch.object(bot, "BOT_TOKEN", "fake-token"), patch.object(bot, "CHAT_ID", "123"):
@@ -180,9 +180,9 @@ class BotTests(unittest.TestCase):
         send.assert_called_once()
         self.assertFalse((bot.DIAGNOSTICS_DIR / "summary.txt").exists())
 
-    @patch("bot.time.sleep")
+    @patch("fuelbot.app.time.sleep")
     def test_1250_local_time_handles_winter_summer_and_late_starts(self, sleep):
-        with patch.object(bot, "SEND_AT", "12:50"), patch("bot.datetime", wraps=datetime) as clock:
+        with patch.object(bot, "SEND_AT", "12:50"), patch("fuelbot.app.datetime", wraps=datetime) as clock:
             for month in (1, 7):
                 with self.subTest(month=month):
                     clock.now.return_value = datetime(2026, month, 15, 12, 40, tzinfo=bot.TIMEZONE)
@@ -196,7 +196,7 @@ class BotTests(unittest.TestCase):
                     bot.wait_until_send_time()
                     sleep.assert_not_called()
 
-    @patch("bot.requests.get")
+    @patch("fuelbot.app.requests.get")
     def test_parser_ignores_layout_and_headers_and_sorts_dates(self, get):
         get.return_value = self.response("""
             <table><tr><td>Menu</td><td>Help</td></tr></table>
@@ -213,8 +213,8 @@ class BotTests(unittest.TestCase):
         self.assertLess(dates[0], dates[1])
         self.assertEqual(prices, [32.45, 32.22])
 
-    @patch("bot.time.sleep")
-    @patch("bot.fetch_table_rows")
+    @patch("fuelbot.app.time.sleep")
+    @patch("fuelbot.app.fetch_table_rows")
     def test_connect_timeout_recovers_using_alternate_official_hostname(self, fetch, sleep):
         fetch.side_effect = [requests.ConnectTimeout("connection timed out"), ["rows"]]
         self.assertEqual(bot.get_table_rows(bot.URLS["Benzina 95"]), ["rows"])
@@ -222,8 +222,8 @@ class BotTests(unittest.TestCase):
         sleep.assert_called_once_with(bot.FETCH_RETRY_DELAY)
 
     @patch("fuelbot.sources.log_dns")
-    @patch("bot.time.sleep")
-    @patch("bot.fetch_table_rows", side_effect=requests.ReadTimeout("read timed out"))
+    @patch("fuelbot.app.time.sleep")
+    @patch("fuelbot.app.fetch_table_rows", side_effect=requests.ReadTimeout("read timed out"))
     def test_exhausted_retries_report_failure_and_dns(self, fetch, sleep, dns):
         with patch.object(bot, "FETCH_ATTEMPTS", 2):
             with self.assertRaisesRegex(RuntimeError, "after 2 attempts: ReadTimeout"):
@@ -231,7 +231,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 2)
         self.assertEqual(dns.call_count, 2)
 
-    @patch("bot.requests.get")
+    @patch("fuelbot.app.requests.get")
     def test_missing_table_saves_response_for_debugging(self, get):
         get.return_value = self.response("<title>Maintenance</title><p>Try later</p>")
         with self.assertRaisesRegex(RuntimeError, "Maintenance"):
@@ -239,7 +239,7 @@ class BotTests(unittest.TestCase):
         self.assertEqual(len(list(bot.DIAGNOSTICS_DIR.glob("*.html"))), 1)
         self.assertEqual(len(list(bot.DIAGNOSTICS_DIR.glob("*.json"))), 1)
 
-    @patch("bot.requests.post")
+    @patch("fuelbot.app.requests.post")
     def test_telegram_rejection_is_not_success(self, post):
         post.return_value = self.response('{"ok":false,"description":"Forbidden"}', 403)
         with patch.object(bot, "BOT_TOKEN", "fake-token"), patch.object(bot, "CHAT_ID", "123"):
@@ -256,16 +256,16 @@ class BotTests(unittest.TestCase):
         self.assertNotIn("fake-secret", rendered)
         self.assertIn("[REDACTED]", rendered)
 
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.get_table_rows")
     def test_missing_secrets_fail_before_network(self, fetch):
         with patch.object(bot, "BOT_TOKEN", ""), patch.object(bot, "CHAT_ID", ""):
             with self.assertRaisesRegex(RuntimeError, "Missing GitHub Actions secrets"):
                 bot.main()
         fetch.assert_not_called()
 
-    @patch("bot.send_photo_telegram")
-    @patch("bot.wait_until_send_time")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram")
+    @patch("fuelbot.scheduler.wait_until_send_time")
+    @patch("fuelbot.app.get_table_rows")
     def test_dry_run_builds_chart_without_wait_or_telegram(self, fetch, wait, send):
         fetch.return_value = self.history_rows([32.22, 32.45])
         with patch.object(bot, "BOT_TOKEN", ""), patch.object(bot, "CHAT_ID", ""), \
@@ -276,8 +276,8 @@ class BotTests(unittest.TestCase):
         self.assertTrue((bot.DIAGNOSTICS_DIR / "chart.png").read_bytes().startswith(b"\x89PNG"))
         self.assertIn("Dry run: True", (bot.DIAGNOSTICS_DIR / "summary.txt").read_text())
 
-    @patch("bot.get_table_rows")
-    @patch("bot.send_photo_telegram")
+    @patch("fuelbot.app.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram")
     def test_supplied_official_history_preserves_report_without_network(self, send, fetch):
         histories = [self.history_rows([32.45, 32.72, 32.99, 33.21, 33.41, 33.53]),
                      self.history_rows([35.88, 35.90, 35.82, 35.57, 35.42, 35.22])]
@@ -291,9 +291,9 @@ class BotTests(unittest.TestCase):
         self.assertIn("35.88 lei/litru", caption)
         self.assertNotIn("logos-pres.md", caption)
 
-    @patch("bot.fetch_mirrored_history", side_effect=RuntimeError("no fresh mirror"))
-    @patch("bot.get_table_rows")
-    @patch("bot.send_photo_telegram")
+    @patch("fuelbot.app.fetch_mirrored_history", side_effect=RuntimeError("no fresh mirror"))
+    @patch("fuelbot.app.get_table_rows")
+    @patch("fuelbot.app.send_photo_telegram")
     def test_stale_or_mismatched_direct_history_never_sends(self, send, fetch, mirror):
         stale = bot.expected_publication_date() - timedelta(days=2)
         for histories in ([self.history_rows([1, 2], stale)] * 2,
@@ -304,7 +304,7 @@ class BotTests(unittest.TestCase):
         send.assert_not_called()
 
     def test_weekend_publication_date_is_friday(self):
-        with patch("bot.datetime", wraps=datetime) as clock:
+        with patch("fuelbot.app.datetime", wraps=datetime) as clock:
             for day in (6, 7, 8):
                 clock.now.return_value = datetime(2026, 11, day, 12, 50, tzinfo=bot.TIMEZONE)
                 self.assertEqual(bot.expected_publication_date(), datetime(2026, 11, 6).date())

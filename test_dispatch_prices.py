@@ -3,20 +3,20 @@ import unittest
 from datetime import datetime
 from unittest.mock import Mock, patch
 
-import bot
+import fuelbot.app as bot
 import dispatch_prices
 
 
 class DispatchTests(unittest.TestCase):
     def setUp(self):
-        clock = patch("bot.datetime", wraps=datetime)
+        clock = patch("fuelbot.app.datetime", wraps=datetime)
         self.clock = clock.start()
         self.clock.now.return_value = datetime(2026, 11, 5, 12, 43, tzinfo=bot.TIMEZONE)
         self.addCleanup(clock.stop)
 
     @patch("dispatch_prices.github_headers", return_value={"Authorization": "Bearer fake"})
     @patch("dispatch_prices.requests.get")
-    @patch("bot.get_table_rows")
+    @patch("fuelbot.app.get_table_rows")
     @patch("dispatch_prices.requests.post")
     def test_delivery_marker_skips_fetch_and_dispatch(self, post, fetch, get, headers):
         get.return_value.json.return_value = {"actions_caches": [{"key": "sent-2026-11-05"}]}
@@ -36,8 +36,8 @@ class DispatchTests(unittest.TestCase):
         post.assert_not_called()
 
     @patch("dispatch_prices.github_headers", return_value={"Authorization": "Bearer fake"})
-    @patch("bot.history_payload", return_value={"source": {"published_date": "2026-11-05"}})
-    @patch("bot.get_table_rows", return_value=["rows"])
+    @patch("fuelbot.app.history_payload", return_value={"source": {"published_date": "2026-11-05"}})
+    @patch("fuelbot.app.get_table_rows", return_value=["rows"])
     @patch("dispatch_prices.requests.post")
     @patch("dispatch_prices.requests.get")
     def test_dry_run_uses_fresh_history_and_cannot_mark_real_delivery(self, get, post, fetch, payload, headers):
