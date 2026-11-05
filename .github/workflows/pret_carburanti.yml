@@ -3,7 +3,7 @@ name: Pret Carburanti ANRE
 on:
   schedule:
     # Early opportunities cover the observed 7-9 hour schedule-event delays.
-    # Runs arriving before 07:15 local exit without a delivery marker.
+    # Runs arriving before 07:15 local exit without recording delivery.
     - cron: '17 0,2,4,6 * * 1-5'
     - cron: '7 8 * * 1-5'
     - cron: '37 9 * * 1-5'
@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
       automated:
-        description: 'Respect daily delivery marker and wait for 12:50 Chisinau time'
+        description: 'Wait for 12:50 Chisinau time (all sends respect durable records)'
         type: boolean
         default: false
       force:
@@ -38,8 +38,6 @@ permissions:
 env:
   PYTHONUNBUFFERED: '1'
   MPLBACKEND: Agg
-  AUTOMATED: ${{ github.event_name == 'schedule' || inputs.automated }}
-  DRY_RUN: ${{ inputs.dry_run }}
 
 jobs:
   send-prices:

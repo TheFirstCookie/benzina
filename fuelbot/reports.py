@@ -234,4 +234,4 @@ def build_report(history, today):
     detail = (f"Source: {history.source}\n"
               f"Benzina 95: {benzina['data']} / {benzina['pret']:.2f} lei\n"
               f"Motorina: {motorina['data']} / {motorina['pret']:.2f} lei")
-    return Report(chart.getvalue(), caption, detail)
+    return Report(chart.getvalue(), caption, detail, history.petrol[0].date.date())

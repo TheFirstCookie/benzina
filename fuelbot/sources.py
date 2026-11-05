@@ -3,7 +3,6 @@ import json
 import logging
 import socket
 import time
-from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 import requests
 from bs4 import BeautifulSoup
@@ -11,6 +10,7 @@ from .config import (CONNECT_TIMEOUT, REQUEST_TIMEOUT, FETCH_ATTEMPTS,
                      FETCH_RETRY_DELAY, HISTORY_MIRROR_URL, MIRROR_ATTEMPTS)
 from .parsing import parse_date, parse_price
 from .models import PricePoint
+from .validation import decode_history
 
 class SourceUnavailable(RuntimeError):
     """A source could not return usable publication history."""
@@ -26,7 +26,7 @@ def log_dns(url):
         logging.error("DNS %s failed: %s", host, error)
 
 
-def fetch_table_rows(url, diagnostics_dir):
+def fetch_anre_page(url, diagnostics_dir):
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; ANREPriceBot/1.0)",
         "Accept": "text/html,application/xhtml+xml",
@@ -86,8 +86,8 @@ def fetch_table_rows(url, diagnostics_dir):
                        "see diagnostics HTML")
 
 
-def get_table_rows(url, diagnostics_dir, fetch=None):
-    fetch = fetch or (lambda candidate: fetch_table_rows(candidate, diagnostics_dir))
+def fetch_anre(url, diagnostics_dir, fetch=None):
+    fetch = fetch or (lambda candidate: fetch_anre_page(candidate, diagnostics_dir))
     # anre.md uneori raspunde cu o pagina fara tabel sau nu raspunde deloc
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         parts = urlsplit(url)
@@ -114,7 +114,7 @@ def get_table_rows(url, diagnostics_dir, fetch=None):
             time.sleep(FETCH_RETRY_DELAY)
 
 
-def fetch_mirrored_history(decode, diagnostics_dir):
+def fetch_mirror(now, diagnostics_dir):
     for attempt in range(1, MIRROR_ATTEMPTS + 1):
         logging.info("ANRE history mirror attempt %d/%d: %s", attempt,
                      MIRROR_ATTEMPTS, HISTORY_MIRROR_URL)
@@ -124,7 +124,7 @@ def fetch_mirrored_history(decode, diagnostics_dir):
             response.raise_for_status()
             diagnostics_dir.mkdir(parents=True, exist_ok=True)
             (diagnostics_dir / "mirrored-history.json").write_text(response.text, encoding="utf-8")
-            histories = decode(response.json())
+            histories = decode_history(response.json(), now, source=HISTORY_MIRROR_URL)
             logging.info("Validated mirrored ANRE history: %s", response.json()["source"]["published_date"])
             return histories
         except (requests.RequestException, ValueError, KeyError, TypeError) as error:

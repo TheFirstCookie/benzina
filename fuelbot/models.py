@@ -1,6 +1,6 @@
 """Source-independent publication records; HTML stops at the source boundary."""
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -21,3 +21,4 @@ class Report:
     chart: bytes
     caption: str
     detail: str
+    published_date: date

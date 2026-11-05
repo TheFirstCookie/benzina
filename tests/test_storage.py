@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from fuelbot.delivery import deliver_once
-from fuelbot.storage import GitHubLedger, SQLiteLedger, StorageError
+from fuelbot.storage import GitHubLedger, SQLiteLedger, StorageError, make_ledger
+from fuelbot.config import Settings
 from fuelbot.telegram import TelegramRejected, TelegramUncertain
 
 
@@ -68,6 +69,25 @@ class LedgerTests(unittest.TestCase):
         self.assertIsNone(deliver_once(self.ledger, self.key, send))
         send.assert_called_once()
 
+    def test_a_replaced_reservation_cannot_be_confirmed_by_its_old_owner(self):
+        original = self.ledger.reserve(self.key)
+        replacement = self.ledger.reserve(self.key, force=True)
+        with self.assertRaises(StorageError):
+            self.ledger.finish(original, "sent", 42)
+        self.ledger.finish(replacement, "sent", 43)
+        self.assertEqual(self.ledger.get(self.key)["message_id"], 43)
+
+    def test_corrupt_storage_blocks_sending_instead_of_losing_history(self):
+        from contextlib import closing
+        import sqlite3
+        with closing(sqlite3.connect(self.path)) as connection:
+            with connection:
+                connection.execute("INSERT INTO deliveries VALUES (?, ?)", (self.key, '{"status":"unknown"}'))
+        send = Mock(return_value=42)
+        with self.assertRaises(StorageError):
+            deliver_once(self.ledger, self.key, send)
+        send.assert_not_called()
+
 
 class GitHubLedgerTests(unittest.TestCase):
     def setUp(self):
@@ -106,3 +126,14 @@ class GitHubLedgerTests(unittest.TestCase):
             self.session.request.return_value = response
             with self.assertRaises(StorageError):
                 self.ledger.get("2026-11-05")
+
+    def test_actions_cannot_silently_fall_back_to_ephemeral_storage(self):
+        with patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}):
+            with self.assertRaisesRegex(StorageError, "GITHUB_TOKEN"):
+                make_ledger(Settings())
+
+    @patch("fuelbot.storage.GitHubLedger")
+    def test_github_configuration_uses_the_durable_backend(self, github):
+        settings = Settings(github_token="fake-token")
+        self.assertIs(make_ledger(settings), github.return_value)
+        github.assert_called_once_with(settings.github_repository, "fake-token", "bot-deliveries")

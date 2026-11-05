@@ -1,0 +1,16 @@
+⛽ *Preturi Carburanti — ANRE Moldova*
+📅 23 octombrie 2026
+━━━━━━━━━━━━━━━━━━
+*Benzina 95*
+💰 Pret: `32.45 lei/litru`
+🔻 -0.27 lei fata de 22 octombrie 2026
+
+*Motorina*
+💰 Pret: `35.88 lei/litru`
+🔻 -0.02 lei fata de 22 octombrie 2026
+━━━━━━━━━━━━━━━━━━
+📊 *Rezumat saptamana:*
+Benzina 95: 🔻 -1.08 lei
+Motorina:   🔺 +0.66 lei
+_Sursa: anre.md/benzina-95-3-2_
+_Sursa: anre.md/motorina-3-3_

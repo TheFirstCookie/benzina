@@ -2,6 +2,11 @@
 import logging
 
 from .telegram import TelegramRejected
+from .storage import StorageError
+
+
+class DeliveryRecordingError(StorageError):
+    """Telegram accepted the message, but durable confirmation failed."""
 
 
 def deliver_once(ledger, key, send, force=False):
@@ -21,6 +26,6 @@ def deliver_once(ledger, key, send, force=False):
     try:
         ledger.finish(reservation, "sent", message_id)
     except Exception as error:
-        raise RuntimeError(f"Telegram accepted message {message_id}, but its delivery record could not be confirmed; "
-                           "the reservation blocks automatic resending") from error
+        raise DeliveryRecordingError(f"Telegram accepted message {message_id}, but its delivery record could not be confirmed; "
+                                     "the reservation blocks automatic resending") from error
     return message_id
