@@ -29,7 +29,7 @@ DIAGNOSTICS_DIR = _settings.diagnostics_dir
 STAGE = "startup"
 
 
-from fuelbot import sources, reports
+from fuelbot import sources, reports, telegram
 from fuelbot.reports import get_history, get_latest, format_date, get_weekly_change, make_chart, format_block, format_weekly
 from fuelbot.models import PricePoint, FuelHistory
 from fuelbot.parsing import LUNI, parse_date, parse_price
@@ -164,45 +164,7 @@ def complete_report(chart, caption, detail, dry_run):
 
 
 def send_photo_telegram(image_buf, caption):
-    if not BOT_TOKEN:
-        raise RuntimeError("Lipseste secretul BOT_TOKEN")
-
-    if not CHAT_ID:
-        raise RuntimeError("Lipseste secretul CHAT_ID")
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-
-    logging.info("Sending Telegram photo: bytes=%d caption_characters=%d",
-                 image_buf.getbuffer().nbytes, len(caption))
-    response = requests.post(
-        url,
-        data={
-            "chat_id": CHAT_ID,
-            "caption": caption,
-            "parse_mode": "Markdown"
-        },
-        files={
-            "photo": ("chart.png", image_buf, "image/png")
-        },
-        timeout=REQUEST_TIMEOUT
-    )
-
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = {"description": response.text[:500]}
-
-    if not response.ok or not payload.get("ok", False):
-        description = payload.get("description", payload)
-        raise RuntimeError(
-            f"Telegram sendPhoto a esuat ({response.status_code}): {description}"
-        )
-
-    message = payload.get("result", {})
-    logging.info(
-        "Telegram a acceptat mesajul: message_id=%s",
-        message.get("message_id")
-    )
+    return telegram.send_photo(Settings(bot_token=BOT_TOKEN, chat_id=CHAT_ID), image_buf.getvalue(), caption)
 
 
 def wait_until_send_time(lead_seconds=0):
