@@ -239,9 +239,9 @@ def parse_mirrored_history(payload):
     if source["name"] != "ANRE" or source["url"] not in ("https://anre.md", "https://anre.md/"):
         raise ValueError("History feed does not identify the official ANRE source")
     latest = datetime.strptime(source["published_date"], "%Y-%m-%d")
-    age = (datetime.now(TIMEZONE).date() - latest.date()).days
-    if not 0 <= age <= 7:
-        raise ValueError("Mirrored ANRE publication date is stale or future")
+    if latest.date() != expected_publication_date():
+        raise ValueError(f"ANRE publication date {latest.date()} is stale or future; "
+                         f"expected {expected_publication_date()}")
     histories = []
     for key in ("gasoline_95", "diesel"):
         product = payload["products"][key]
@@ -276,6 +276,41 @@ def parse_mirrored_history(payload):
             != [row.find("td").text for row in histories[1]]):
         raise ValueError("Mirrored fuel histories have different publication dates")
     return histories
+
+
+def expected_publication_date():
+    date = datetime.now(TIMEZONE).date()
+    while date.weekday() >= 5:
+        date -= timedelta(days=1)
+    return date
+
+
+def validate_histories(histories):
+    dates = [[parse_date(row.find("td").get_text(" ", strip=True))
+              for row in rows] for rows in histories]
+    if any(len(items) < 2 or items[0].date() != expected_publication_date()
+           for items in dates):
+        raise ValueError(f"ANRE history is stale or future; expected publication "
+                         f"{expected_publication_date()}")
+    if dates[0] != dates[1]:
+        raise ValueError("Fuel histories have different publication dates")
+
+
+def history_payload(histories):
+    """Transport official publication rows to a runner unable to reach ANRE."""
+    validate_histories(histories)
+    products = {}
+    for key, rows in zip(("gasoline_95", "diesel"), histories):
+        latest = get_latest(rows)
+        dates, prices = get_history(rows, limit=10)
+        products[key] = {"current": latest["pret"], "change": latest["diferenta"],
+                         "history": [{"date": date.strftime("%Y-%m-%d"), "price": price}
+                                     for date, price in zip(dates, prices)]}
+    payload = {"source": {"name": "ANRE", "url": "https://anre.md/",
+                           "published_date": expected_publication_date().isoformat()},
+               "products": products}
+    parse_mirrored_history(payload)
+    return payload
 
 
 def fetch_mirrored_history():
@@ -572,16 +607,22 @@ def main(dry_run=False):
     logging.info("Rulez botul pentru data locala: %s", today.date())
 
     mirrored = False
-    try:
-        set_stage("fetch Benzina 95")
-        b_rows = get_table_rows(URLS["Benzina 95"])
-        set_stage("fetch Motorina")
-        m_rows = get_table_rows(URLS["Motorina"])
-    except (requests.RequestException, RuntimeError) as error:
-        logging.warning("Direct ANRE history unavailable; trying publication-history mirror: %s", error)
-        set_stage("fetch mirrored ANRE publication history")
-        b_rows, m_rows = fetch_mirrored_history()
-        mirrored = True
+    supplied_history = os.environ.get("ANRE_HISTORY_JSON", "").strip()
+    if supplied_history:
+        set_stage("validate supplied ANRE publication history")
+        b_rows, m_rows = parse_mirrored_history(json.loads(supplied_history))
+    else:
+        try:
+            set_stage("fetch Benzina 95")
+            b_rows = get_table_rows(URLS["Benzina 95"])
+            set_stage("fetch Motorina")
+            m_rows = get_table_rows(URLS["Motorina"])
+            validate_histories((b_rows, m_rows))
+        except (requests.RequestException, RuntimeError, ValueError) as error:
+            logging.warning("Direct ANRE history unavailable; trying publication-history mirror: %s", error)
+            set_stage("fetch mirrored ANRE publication history")
+            b_rows, m_rows = fetch_mirrored_history()
+            mirrored = True
 
     set_stage("parse prices")
     b_dates, b_prices = get_history(b_rows)

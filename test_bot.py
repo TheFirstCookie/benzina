@@ -29,9 +29,14 @@ class BotTests(unittest.TestCase):
         response.headers["Content-Type"] = "text/html"
         return response
 
-    def history_rows(self, prices):
-        dates = ["23 octombrie 2026", "22 octombrie 2026", "21 octombrie 2026",
-                 "20 octombrie 2026", "19 octombrie 2026", "16 octombrie 2026"]
+    def history_rows(self, prices, published=None):
+        day = published or bot.expected_publication_date()
+        dates = []
+        for _ in prices:
+            dates.append(f"{day.day} {list(bot.LUNI)[day.month - 1]} {day.year}")
+            day -= timedelta(days=1)
+            while day.weekday() >= 5:
+                day -= timedelta(days=1)
         html = "<table>" + "".join(
             f"<tr><td>{date}</td><td>{price}</td></tr>"
             for date, price in zip(dates, prices)
@@ -42,8 +47,9 @@ class BotTests(unittest.TestCase):
     @patch("bot.wait_until_send_time")
     @patch("bot.get_table_rows")
     def test_original_friday_report_matches_telegram_caption(self, fetch, wait, send):
-        fetch.side_effect = [self.history_rows([32.45, 32.72, 32.99, 33.21, 33.41, 33.53]),
-                             self.history_rows([35.88, 35.90, 35.82, 35.57, 35.42, 35.22])]
+        published = datetime(2026, 10, 23).date()
+        fetch.side_effect = [self.history_rows([32.45, 32.72, 32.99, 33.21, 33.41, 33.53], published),
+                             self.history_rows([35.88, 35.90, 35.82, 35.57, 35.42, 35.22], published)]
         with patch("bot.datetime", wraps=datetime) as clock, \
                 patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
             clock.now.return_value = datetime(2026, 10, 23, 12, 50, tzinfo=bot.TIMEZONE)
@@ -83,7 +89,7 @@ class BotTests(unittest.TestCase):
         send.assert_not_called()
 
     def mirrored_payload(self):
-        today = datetime.now(bot.TIMEZONE).date()
+        today = bot.expected_publication_date()
         def product(prices):
             return {"current": prices[0], "change": round(prices[0] - prices[1], 2),
                     "history": [{"date": (today - timedelta(days=i)).isoformat(), "price": price}
@@ -133,6 +139,7 @@ class BotTests(unittest.TestCase):
             (("source", "name"), "Other"),
             (("source", "url"), "https://other.example/"),
             (("source", "published_date"), (today - timedelta(days=8)).isoformat()),
+            (("source", "published_date"), (bot.expected_publication_date() - timedelta(days=1)).isoformat()),
             (("source", "published_date"), (today + timedelta(days=1)).isoformat()),
             (("products", "gasoline_95", "current"), 99),
             (("products", "diesel", "change"), 99),
@@ -264,11 +271,7 @@ class BotTests(unittest.TestCase):
     @patch("bot.wait_until_send_time")
     @patch("bot.get_table_rows")
     def test_dry_run_builds_chart_without_wait_or_telegram(self, fetch, wait, send):
-        soup = bot.BeautifulSoup("""<table>
-            <tr><td>26 octombrie 2026</td><td>32,22</td></tr>
-            <tr><td>23 octombrie 2026</td><td>32,45</td></tr>
-            </table>""", "html.parser")
-        fetch.return_value = soup.find_all("tr")
+        fetch.return_value = self.history_rows([32.22, 32.45])
         with patch.object(bot, "BOT_TOKEN", ""), patch.object(bot, "CHAT_ID", ""), \
                 patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
             bot.main(dry_run=True)
@@ -276,6 +279,39 @@ class BotTests(unittest.TestCase):
         send.assert_not_called()
         self.assertTrue((bot.DIAGNOSTICS_DIR / "chart.png").read_bytes().startswith(b"\x89PNG"))
         self.assertIn("Dry run: True", (bot.DIAGNOSTICS_DIR / "summary.txt").read_text())
+
+    @patch("bot.get_table_rows")
+    @patch("bot.send_photo_telegram")
+    def test_supplied_official_history_preserves_report_without_network(self, send, fetch):
+        histories = [self.history_rows([32.45, 32.72, 32.99, 33.21, 33.41, 33.53]),
+                     self.history_rows([35.88, 35.90, 35.82, 35.57, 35.42, 35.22])]
+        payload = bot.history_payload(histories)
+        with patch.dict("os.environ", {"ANRE_HISTORY_JSON": json.dumps(payload), "GITHUB_STEP_SUMMARY": ""}):
+            bot.main(dry_run=True)
+        fetch.assert_not_called()
+        send.assert_not_called()
+        caption = (bot.DIAGNOSTICS_DIR / "caption.txt").read_text(encoding="utf-8")
+        self.assertIn("32.45 lei/litru", caption)
+        self.assertIn("35.88 lei/litru", caption)
+        self.assertNotIn("logos-pres.md", caption)
+
+    @patch("bot.fetch_mirrored_history", side_effect=RuntimeError("no fresh mirror"))
+    @patch("bot.get_table_rows")
+    @patch("bot.send_photo_telegram")
+    def test_stale_or_mismatched_direct_history_never_sends(self, send, fetch, mirror):
+        stale = bot.expected_publication_date() - timedelta(days=2)
+        for histories in ([self.history_rows([1, 2], stale)] * 2,
+                          [self.history_rows([1, 2]), self.history_rows([1, 2, 3])]):
+            fetch.side_effect = histories
+            with self.assertRaisesRegex(RuntimeError, "no fresh mirror"):
+                bot.main(dry_run=True)
+        send.assert_not_called()
+
+    def test_weekend_publication_date_is_friday(self):
+        with patch("bot.datetime", wraps=datetime) as clock:
+            for day in (6, 7, 8):
+                clock.now.return_value = datetime(2026, 11, day, 12, 50, tzinfo=bot.TIMEZONE)
+                self.assertEqual(bot.expected_publication_date(), datetime(2026, 11, 6).date())
 
 
 if __name__ == "__main__":

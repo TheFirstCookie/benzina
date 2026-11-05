@@ -1,6 +1,6 @@
 # ANRE fuel prices
 
-Fetches ANRE Moldova's petrol and diesel price history, generates the original blue/green line chart, and sends it to Telegram with daily price comparisons and Friday's weekly summary. Scheduled weekday runs prepare the report from 12:45 and send at **12:50 PM Europe/Chisinau**, automatically following winter/summer time; later runs send immediately. GitHub may delay scheduled starts, so several early starts/retries are retained. A daily cache marker skips subsequent successful scheduled deliveries. Manual runs send immediately and bypass that marker.
+Fetches ANRE Moldova's petrol and diesel price history, generates the original blue/green line chart, and sends it to Telegram with daily price comparisons and Friday's weekly summary. Scheduled weekday runs prepare the report from 12:45 and send at **12:50 PM Europe/Chisinau**, automatically following winter/summer time; later runs send immediately. GitHub cron can be delayed by hours, so multiple early starts and retries are retained. Runs arriving before 07:15 local exit, keeping the wait within the runner's job limit. A daily cache marker skips subsequent automated deliveries. Manual runs bypass that check but now also record successful delivery. All real sends share one concurrency group so manual and automated runs cannot race each other.
 
 The bot tries both official history hostnames over HTTPS. If either fuel is unavailable, it fetches both publication histories from the [Logos Press ANRE history feed](https://logos-pres.md/wp-json/logos/v1/fuel-prices?days=30&lang=ro). This preserves the original line chart, publication dates, daily comparisons and Friday summary. Fallback reports retain the original ANRE source links and add `Date ANRE preluate prin logos-pres.md` to identify the intermediary. The feed's latest ten publications were compared with both official tables on October 27. No current-cap bar chart or cached price snapshot is used.
 
@@ -30,9 +30,29 @@ Open the run's **Summary** for the failed stage and error. Download its `diagnos
 
 `ConnectTimeout` means the runner could not establish the connection; `ReadTimeout` means the server did not return data in time; DNS errors indicate hostname resolution failure. HTTP 403/429 suggests access denial/rate limiting; 5xx suggests a server issue. Missing valid price rows points to page content; inspect the saved HTML. Telegram errors show its HTTP status and API description. Telegram tokens and chat IDs are redacted from application logs and summaries; Telegram responses are not stored as artifacts.
 
-Requests use verified HTTPS, a 10-second connection timeout and a 30-second read timeout. Two direct history attempts alternate `anre.md` and `www.anre.md`, with 5 seconds between attempts. The mirror gets up to three attempts. Mirrored data must identify ANRE as its source, have a publication date no more than seven days old and never in the future, contain at least six valid prices per fuel, have matching publication dates, and agree with its advertised latest prices and daily changes. A failure of both direct history and the mirror fails the run without claiming delivery. Failed sends do not create the scheduled delivery marker. Telegram sends are not retried automatically because an ambiguous timeout could otherwise cause duplicate messages.
+Requests use verified HTTPS, a 10-second connection timeout and a 30-second read timeout. Two direct history attempts alternate `anre.md` and `www.anre.md`, with 5 seconds between attempts. The mirror gets up to three attempts. All histories must have today's publication date (Friday on weekends) and matching petrol/diesel dates. Mirrored and supplied data must also identify ANRE as the source, contain at least six valid prices per fuel, and agree with the advertised latest prices and daily changes. Stale data, including a holiday without a new publication, fails explicitly instead of being posted as a new daily update. A failure of both direct history and the mirror fails the run without claiming delivery. Failed sends and dry runs do not create the daily marker. Telegram sends are not retried automatically because an ambiguous timeout could otherwise cause duplicate messages.
 
 Every workflow run that has not already delivered the daily message runs the unit tests before starting the bot. Tests cover history parsing, mirror recovery and validation, the exact original Friday caption, failure without partial reports, 12:50 local scheduling in winter/summer, chart generation, and Telegram failure handling.
+
+## Optional Windows scheduler
+
+On a Windows computer that can reach ANRE, `dispatch_prices.py` fetches both official histories and passes validated price/date JSON to a manual GitHub Actions dispatch. This avoids both the delayed GitHub cron event and the runner-to-ANRE network failure. The Telegram token stays in repository secrets. The relay uses the existing Git credential manager login, without saving a second GitHub token. Its history is revalidated on the runner before rendering the original report.
+
+```powershell
+.venv\Scripts\python.exe dispatch_prices.py --prepare-only
+.venv\Scripts\python.exe dispatch_prices.py --dry-run
+powershell -NoProfile -ExecutionPolicy Bypass -File install_schedule.ps1
+```
+
+The first command only validates locally. The second dispatches a GitHub dry run without Telegram delivery. The last installs the task for the current user at 12:43, 12:53 and 13:03 on weekdays. Windows must use the Chisinau time zone, and the user must be signed in with internet access; the task requests wake from sleep, but cannot start a powered-off computer. The extra triggers retry failures; daily marker checks suppress successful duplicates. Logs and fetched history are in `diagnostics/relay/`. GitHub cron remains a backup. Runner availability can still delay dispatch, so this improves punctuality without guaranteeing delivery to the second.
+
+Remove the task with `Unregister-ScheduledTask -TaskName 'ANRE fuel prices - GitHub dispatch' -Confirm:$false`. Running the installer again updates the same task.
+
+## November 5, 2026 investigation
+
+The [November 5 scheduled run](https://github.com/TheFirstCookie/benzina/actions/runs/42049597119) was only created at 14:54 UTC (16:54 Chisinau), after the earliest configured 06:37 UTC opportunity. Its bot log confirms both official hostnames timed out, the Logos feed returned November 3 publications, and Telegram accepted message 332 at 14:55:26 UTC. The [November 4 first run](https://github.com/TheFirstCookie/benzina/actions/runs/41851407142) also delivered the November 3 publication. These runs demonstrate late delivery and stale fallback data; they do not demonstrate that Telegram rejected the messages.
+
+On November 5 the local official tables contained the November 5 publication: petrol 30.80 and diesel 35.94 lei/litre. The old seven-day freshness rule allowed the frozen mirror to be marked as a successful daily delivery, suppressing later attempts. Freshness validation, earlier cron opportunities, shared send concurrency, and the optional local relay address these separate problems. The relay is only active after installing its Windows task.
 
 ## October 27, 2026 investigation
 

@@ -2,7 +2,9 @@ name: Pret Carburanti ANRE
 
 on:
   schedule:
-    - cron: '37 6 * * 1-5'
+    # Early opportunities cover the observed 7-9 hour schedule-event delays.
+    # Runs arriving before 07:15 local exit without a delivery marker.
+    - cron: '17 0,2,4,6 * * 1-5'
     - cron: '7 8 * * 1-5'
     - cron: '37 9 * * 1-5'
     - cron: '7 11 * * 1-5'
@@ -17,6 +19,14 @@ on:
         description: 'Enable detailed application logging'
         type: boolean
         default: false
+      automated:
+        description: 'Respect daily delivery marker and wait for 12:50 Chisinau time'
+        type: boolean
+        default: false
+      history_json:
+        description: 'Optional fresh ANRE publication history from dispatch_prices.py'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -24,22 +34,32 @@ permissions:
 env:
   PYTHONUNBUFFERED: '1'
   MPLBACKEND: Agg
+  AUTOMATED: ${{ github.event_name == 'schedule' || inputs.automated }}
+  DRY_RUN: ${{ inputs.dry_run }}
 
 jobs:
   send-prices:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     concurrency:
-      group: send-prices-${{ github.event_name }}
+      group: send-prices
       cancel-in-progress: false
     steps:
       - name: Data de azi (Moldova)
         id: today
-        run: echo "date=$(TZ=Europe/Chisinau date +%F)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "date=$(TZ=Europe/Chisinau date +%F)" >> "$GITHUB_OUTPUT"
+          eligible=true
+          local_time=$(TZ=Europe/Chisinau date +%H%M)
+          if [[ "$GITHUB_EVENT_NAME" == 'schedule' ]] && (( 10#$local_time < 715 )); then
+            eligible=false
+            echo 'Early schedule opportunity: a later run will prepare the report.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
 
       - name: Verific daca mesajul de azi a fost deja trimis
         id: sent
-        if: github.event_name == 'schedule'
+        if: steps.today.outputs.eligible == 'true' && env.AUTOMATED == 'true' && env.DRY_RUN != 'true'
         uses: actions/cache/restore@v6
         with:
           path: sent.marker
@@ -47,23 +67,23 @@ jobs:
           lookup-only: true
 
       - uses: actions/checkout@v7
-        if: steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
 
       - uses: actions/setup-python@v7
-        if: steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
         with:
           python-version: '3.12'
 
       - name: Instalare dependențe
-        if: steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
         run: pip install -r requirements.txt
 
       - name: Test bot
-        if: steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
         run: python -m unittest -v
 
       - name: Runtime diagnostics
-        if: steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
         run: |
           mkdir -p diagnostics
           {
@@ -77,7 +97,7 @@ jobs:
 
       - name: Rulare bot
         id: bot
-        if: steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
         run: |
           args=()
           if [[ "$DRY_RUN" == 'true' ]]; then args+=(--dry-run); fi
@@ -89,14 +109,15 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID:   ${{ secrets.CHAT_ID }}
           TIMEZONE:  Europe/Chisinau
-          SEND_AT:   ${{ github.event_name == 'schedule' && '12:50' || '' }}
+          SEND_AT:   ${{ (github.event_name == 'schedule' || inputs.automated) && '12:50' || '' }}
+          ANRE_HISTORY_JSON: ${{ inputs.history_json }}
 
       - name: Marchez mesajul de azi ca trimis
-        if: github.event_name == 'schedule' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.bot.outcome == 'success' && env.DRY_RUN != 'true' && steps.sent.outputs.cache-hit != 'true'
         run: touch sent.marker
 
       - uses: actions/cache/save@v6
-        if: github.event_name == 'schedule' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.bot.outcome == 'success' && env.DRY_RUN != 'true' && steps.sent.outputs.cache-hit != 'true'
         with:
           path: sent.marker
           key: sent-${{ steps.today.outputs.date }}
@@ -123,17 +144,19 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           CACHE_HIT: ${{ steps.sent.outputs.cache-hit }}
           BOT_OUTCOME: ${{ steps.bot.outcome }}
+          ELIGIBLE: ${{ steps.today.outputs.eligible }}
         run: |
           {
             echo "### Fuel price workflow"
             echo "- Job: $JOB_STATUS"
+            echo "- Eligible send window: $ELIGIBLE"
             echo "- Already sent today: ${CACHE_HIT:-false}"
             echo "- Bot step: ${BOT_OUTCOME:-not started}"
             echo "- Download the diagnostics artifact for logs, ANRE responses, chart and network checks."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload diagnostics
-        if: always() && steps.sent.outputs.cache-hit != 'true'
+        if: always() && steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
