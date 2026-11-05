@@ -9,3 +9,5 @@ Each numbered step is verified before its commit is pushed. Dry runs never post 
 3. **Data model:** immutable `PricePoint`, `FuelHistory` and `Report` records replace HTML rows outside fetching; both sources and the relay round-trip through the same price/date data. Original caption and PNG regression tests pass.
 
 4. **Validation:** a single module rejects stale/future dates, duplicates, mismatched products, malformed feeds and invalid/nonfinite/boolean prices for every source; round-trip and negative tests pass.
+
+5. **Reports:** chart/caption creation is isolated from HTTP and sending in `fuelbot/reports.py`; exact Friday caption regression and real PNG generation pass.
