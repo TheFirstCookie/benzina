@@ -9,6 +9,7 @@ import subprocess
 import requests
 
 import fuelbot.app as bot
+from fuelbot.storage import GitHubLedger, is_blocked
 
 
 API = "https://api.github.com/repos/TheFirstCookie/benzina"
@@ -36,12 +37,12 @@ def dispatch(dry_run=False, prepare_only=False):
     if not prepare_only:
         headers = github_headers()
         if not dry_run:
-            response = requests.get(API + "/actions/caches", headers=headers,
-                                    params={"key": "sent-" + now.date().isoformat(),
-                                            "ref": "refs/heads/main"}, timeout=30)
-            response.raise_for_status()
-            if response.json()["actions_caches"]:
-                logging.info("Today's delivery is already recorded; skipping")
+            ledger = GitHubLedger(bot.current_settings().github_repository,
+                                  headers["Authorization"].removeprefix("Bearer "),
+                                  bot.current_settings().delivery_branch)
+            record = ledger.get(now.date().isoformat())
+            if is_blocked(record):
+                logging.info("Today's delivery status is %s; skipping", record["status"])
                 return
     histories = [bot.get_table_rows(url) for url in bot.URLS.values()]
     payload = bot.history_payload(histories)

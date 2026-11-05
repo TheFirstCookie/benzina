@@ -23,13 +23,17 @@ on:
         description: 'Respect daily delivery marker and wait for 12:50 Chisinau time'
         type: boolean
         default: false
+      force:
+        description: 'Explicitly resend despite a confirmed or uncertain delivery record'
+        type: boolean
+        default: false
       history_json:
         description: 'Optional fresh ANRE publication history from dispatch_prices.py'
         type: string
         default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   PYTHONUNBUFFERED: '1'
@@ -57,33 +61,24 @@ jobs:
           fi
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
 
-      - name: Verific daca mesajul de azi a fost deja trimis
-        id: sent
-        if: steps.today.outputs.eligible == 'true' && env.AUTOMATED == 'true' && env.DRY_RUN != 'true'
-        uses: actions/cache/restore@v6
-        with:
-          path: sent.marker
-          key: sent-${{ steps.today.outputs.date }}
-          lookup-only: true
-
       - uses: actions/checkout@v7
-        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true'
 
       - uses: actions/setup-python@v7
-        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true'
         with:
           python-version: '3.12'
 
       - name: Instalare dependențe
-        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true'
         run: pip install -r requirements.txt
 
       - name: Test bot
-        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true'
         run: python -m unittest -v
 
       - name: Runtime diagnostics
-        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true'
         run: |
           mkdir -p diagnostics
           {
@@ -97,30 +92,23 @@ jobs:
 
       - name: Rulare bot
         id: bot
-        if: steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: steps.today.outputs.eligible == 'true'
         run: |
           args=()
           if [[ "$DRY_RUN" == 'true' ]]; then args+=(--dry-run); fi
+          if [[ "$FORCE" == 'true' ]]; then args+=(--force); fi
           if [[ "$DEBUG" == 'true' ]]; then args+=(--debug); fi
           python bot.py "${args[@]}"
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           DEBUG: ${{ inputs.debug }}
+          FORCE: ${{ inputs.force }}
+          GITHUB_TOKEN: ${{ github.token }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID:   ${{ secrets.CHAT_ID }}
           TIMEZONE:  Europe/Chisinau
           SEND_AT:   ${{ (github.event_name == 'schedule' || inputs.automated) && '12:50' || '' }}
           ANRE_HISTORY_JSON: ${{ inputs.history_json }}
-
-      - name: Marchez mesajul de azi ca trimis
-        if: steps.bot.outcome == 'success' && env.DRY_RUN != 'true' && steps.sent.outputs.cache-hit != 'true'
-        run: touch sent.marker
-
-      - uses: actions/cache/save@v6
-        if: steps.bot.outcome == 'success' && env.DRY_RUN != 'true' && steps.sent.outputs.cache-hit != 'true'
-        with:
-          path: sent.marker
-          key: sent-${{ steps.today.outputs.date }}
 
       - name: Network diagnostics on failure
         if: failure()
@@ -142,7 +130,6 @@ jobs:
         if: always()
         env:
           JOB_STATUS: ${{ job.status }}
-          CACHE_HIT: ${{ steps.sent.outputs.cache-hit }}
           BOT_OUTCOME: ${{ steps.bot.outcome }}
           ELIGIBLE: ${{ steps.today.outputs.eligible }}
         run: |
@@ -150,13 +137,13 @@ jobs:
             echo "### Fuel price workflow"
             echo "- Job: $JOB_STATUS"
             echo "- Eligible send window: $ELIGIBLE"
-            echo "- Already sent today: ${CACHE_HIT:-false}"
+            echo "- Delivery tracking: durable bot-deliveries branch"
             echo "- Bot step: ${BOT_OUTCOME:-not started}"
             echo "- Download the diagnostics artifact for logs, ANRE responses, chart and network checks."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload diagnostics
-        if: always() && steps.today.outputs.eligible == 'true' && steps.sent.outputs.cache-hit != 'true'
+        if: always() && steps.today.outputs.eligible == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: diagnostics-${{ github.run_id }}-${{ github.run_attempt }}

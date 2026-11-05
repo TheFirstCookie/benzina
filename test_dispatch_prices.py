@@ -15,15 +15,15 @@ class DispatchTests(unittest.TestCase):
         self.addCleanup(clock.stop)
 
     @patch("dispatch_prices.github_headers", return_value={"Authorization": "Bearer fake"})
-    @patch("dispatch_prices.requests.get")
+    @patch("dispatch_prices.GitHubLedger")
     @patch("fuelbot.app.get_table_rows")
     @patch("dispatch_prices.requests.post")
     def test_delivery_marker_skips_fetch_and_dispatch(self, post, fetch, get, headers):
-        get.return_value.json.return_value = {"actions_caches": [{"key": "sent-2026-11-05"}]}
+        get.return_value.get.return_value = {"status": "sent", "message_id": 42}
         dispatch_prices.dispatch()
         fetch.assert_not_called()
         post.assert_not_called()
-        self.assertEqual(get.call_args.kwargs["params"]["ref"], "refs/heads/main")
+        get.return_value.get.assert_called_once_with("2026-11-05")
 
     @patch("dispatch_prices.github_headers")
     @patch("dispatch_prices.requests.get")

@@ -1,3 +1,4 @@
+from dataclasses import replace
 import argparse
 import json
 import math
@@ -30,6 +31,8 @@ STAGE = "startup"
 
 
 from fuelbot import sources, reports, telegram, scheduler
+from fuelbot.storage import make_ledger, is_blocked
+from fuelbot.delivery import deliver_once
 from fuelbot.reports import get_history, get_latest, format_date, get_weekly_change, make_chart, format_block, format_weekly
 from fuelbot.models import PricePoint, FuelHistory
 from fuelbot.parsing import LUNI, parse_date, parse_price
@@ -114,15 +117,18 @@ def history_payload(histories):
     return validation.encode_history(history, datetime.now(TIMEZONE))
 
 
-def complete_report(chart, caption, detail, dry_run):
+def complete_report(chart, caption, detail, dry_run, force=False, ledger=None):
     (DIAGNOSTICS_DIR / "chart.png").write_bytes(chart.getvalue())
     (DIAGNOSTICS_DIR / "caption.txt").write_text(caption, encoding="utf-8")
     if dry_run:
         set_stage("dry run complete")
     else:
-        set_stage("send Telegram photo")
-        send_photo_telegram(chart, caption)
-        set_stage("Telegram delivery confirmed")
+        ledger = ledger or make_ledger(current_settings())
+        def send():
+            set_stage("send Telegram photo")
+            return send_photo_telegram(chart, caption)
+        message_id = deliver_once(ledger, datetime.now(TIMEZONE).date().isoformat(), send, force=force)
+        set_stage("Telegram delivery confirmed" if message_id else "delivery skipped")
     write_summary("success", f"{detail}\nDry run: {dry_run}")
 
 
@@ -135,7 +141,12 @@ def wait_until_send_time(lead_seconds=0):
         Settings(send_at=SEND_AT, timezone=TIMEZONE), lead_seconds, now=datetime.now(TIMEZONE))
 
 
-def main(dry_run=False, scheduled=False):
+def current_settings():
+    return replace(_settings, bot_token=BOT_TOKEN, chat_id=CHAT_ID,
+                   timezone=TIMEZONE, send_at=SEND_AT, diagnostics_dir=DIAGNOSTICS_DIR)
+
+
+def main(dry_run=False, scheduled=False, force=False):
     set_stage("configuration")
     if not dry_run:
         missing = [name for name, value in (("BOT_TOKEN", BOT_TOKEN), ("CHAT_ID", CHAT_ID))
@@ -146,8 +157,15 @@ def main(dry_run=False, scheduled=False):
                  sys.version.split()[0], TIMEZONE, SEND_AT or "immediate", dry_run,
                  os.environ.get("GITHUB_EVENT_NAME", "local"),
                  os.environ.get("GITHUB_RUN_ID", "local"))
+    ledger = None if dry_run else make_ledger(current_settings())
+    if ledger and not force:
+        record = ledger.get(datetime.now(TIMEZONE).date().isoformat())
+        if is_blocked(record):
+            set_stage("delivery skipped")
+            write_summary("skipped", f"Existing durable delivery status: {record['status']}")
+            return
     def deliver(report):
-        return complete_report(io.BytesIO(report.chart), report.caption, report.detail, dry_run)
+        return complete_report(io.BytesIO(report.chart), report.caption, report.detail, dry_run, force, ledger)
     if scheduled:
         return scheduler.run(prepare_report, deliver,
                              Settings(send_at=SEND_AT, timezone=TIMEZONE), dry_run=dry_run)
@@ -187,10 +205,11 @@ def cli():
     parser.add_argument("--dry-run", action="store_true", help="Fetch and chart without sending to Telegram")
     parser.add_argument("--debug", action="store_true", help="Enable application debug logging")
     parser.add_argument("--scheduled", action="store_true", help="Wait until SEND_AT outside the reporting worker")
+    parser.add_argument("--force", action="store_true", help="Explicitly resend despite a delivery record")
     args = parser.parse_args()
     setup_logging(args.debug)
     try:
-        main(dry_run=args.dry_run, scheduled=args.scheduled or bool(SEND_AT))
+        main(dry_run=args.dry_run, scheduled=args.scheduled or bool(SEND_AT), force=args.force)
     except Exception as error:
         logging.exception("Bot failed at stage: %s", STAGE)
         write_summary("FAILED", f"{type(error).__name__}: {error}")

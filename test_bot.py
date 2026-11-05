@@ -15,6 +15,10 @@ import fuelbot.app as bot
 class BotTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        from fuelbot.storage import SQLiteLedger
+        ledger = patch("fuelbot.app.make_ledger", return_value=SQLiteLedger(Path(self.temp.name) / "state.sqlite3"))
+        ledger.start()
+        self.addCleanup(ledger.stop)
         self.addCleanup(self.temp.cleanup)
         self.diag = patch.object(bot, "DIAGNOSTICS_DIR", Path(self.temp.name))
         self.diag.start()
@@ -161,7 +165,7 @@ class BotTests(unittest.TestCase):
         fetch.side_effect = [self.history_rows([32.45, 32.72]), self.history_rows([35.88, 35.90])]
         events = []
         wait.side_effect = lambda *args, **kw: events.append(("wait", kw))
-        send.side_effect = lambda *args: events.append(("send", {}))
+        send.side_effect = lambda *args: (events.append(("send", {})), 42)[1]
         with patch.object(bot, "BOT_TOKEN", "fake-token"), patch.object(bot, "CHAT_ID", "123"), \
                 patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": ""}):
             bot.main(scheduled=True)
