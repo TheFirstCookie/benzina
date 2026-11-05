@@ -1,11 +1,7 @@
 {
-  "status": "sent",
-  "owner": "21a6c49b85634046abf02dc473adf8cf",
-  "updated_at": "2026-11-05T16:33:12.686315+00:00",
-  "run_id": "local",
-  "metadata": {
-    "migrated_from": "https://github.com/TheFirstCookie/benzina/actions/runs/42049597119",
-    "telegram_accepted_at": "2026-11-05T14:55:26Z"
-  },
-  "message_id": 332
+  "status": "reserved",
+  "owner": "718e9ac4b57242b7b796533a9a7d96db",
+  "updated_at": "2026-11-05T16:57:06.624329+00:00",
+  "run_id": "42069668340",
+  "metadata": {}
 }
