@@ -54,46 +54,40 @@ def fetch_mirrored_history():
     return sources.fetch_mirrored_history(parse_mirrored_history, DIAGNOSTICS_DIR)
 
 
-class SafeFormatter(logging.Formatter):
-    def format(self, record):
-        # requests exceptions include the Telegram URL, which contains the token.
-        message = super().format(record)
-        for secret in (BOT_TOKEN, CHAT_ID):
-            if secret:
-                message = message.replace(secret, "[REDACTED]")
-        return message
+
+
+
+
+
+
+
+
+from fuelbot import diagnostics
+_events = []
+
+
+def SafeFormatter(fmt=None):
+    settings = current_settings()
+    return diagnostics.SafeFormatter(fmt, (settings.bot_token, settings.chat_id, settings.github_token))
 
 
 def setup_logging(debug=False):
-    DIAGNOSTICS_DIR.mkdir(parents=True, exist_ok=True)
-    formatter = SafeFormatter("%(asctime)s %(levelname)s %(message)s")
-    handlers = [logging.StreamHandler(), logging.FileHandler(
-        DIAGNOSTICS_DIR / "bot.log", encoding="utf-8")]
-    for handler in handlers:
-        handler.setFormatter(formatter)
-    logging.basicConfig(level=logging.DEBUG if debug else logging.INFO,
-                        handlers=handlers, force=True)
-    # Avoid verbose library HTTP logs, especially Telegram URLs with credentials.
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    diagnostics.Diagnostics(current_settings()).setup_logging(debug)
 
 
 def set_stage(stage):
     global STAGE
     STAGE = stage
-    logging.info("Stage: %s", stage)
+    observer = diagnostics.Diagnostics(current_settings())
+    observer.events = _events
+    observer.set_stage(stage)
 
 
-def write_summary(status, detail):
-    text = f"Bot: {status}\nStage: {STAGE}\n{detail}\n"
-    for secret in (BOT_TOKEN, CHAT_ID):
-        if secret:
-            text = text.replace(secret, "[REDACTED]")
-    (DIAGNOSTICS_DIR / "summary.txt").write_text(text, encoding="utf-8")
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as output:
-            output.write("\n```text\n" + text + "```\n")
+def write_summary(status, detail, error=None):
+    observer = diagnostics.Diagnostics(current_settings())
+    observer.stage = STAGE
+    observer.events = _events
+    observer.summary(status, detail, error)
 
 
 from fuelbot import validation
@@ -129,7 +123,8 @@ def complete_report(chart, caption, detail, dry_run, force=False, ledger=None):
             return send_photo_telegram(chart, caption)
         message_id = deliver_once(ledger, datetime.now(TIMEZONE).date().isoformat(), send, force=force)
         set_stage("Telegram delivery confirmed" if message_id else "delivery skipped")
-    write_summary("success", f"{detail}\nDry run: {dry_run}")
+    status = "skipped" if not dry_run and message_id is None else "success"
+    write_summary(status, f"{detail}\nDry run: {dry_run}")
 
 
 def send_photo_telegram(image_buf, caption):
@@ -147,6 +142,7 @@ def current_settings():
 
 
 def main(dry_run=False, scheduled=False, force=False):
+    _events.clear()
     set_stage("configuration")
     if not dry_run:
         missing = [name for name, value in (("BOT_TOKEN", BOT_TOKEN), ("CHAT_ID", CHAT_ID))
@@ -212,5 +208,5 @@ def cli():
         main(dry_run=args.dry_run, scheduled=args.scheduled or bool(SEND_AT), force=args.force)
     except Exception as error:
         logging.exception("Bot failed at stage: %s", STAGE)
-        write_summary("FAILED", f"{type(error).__name__}: {error}")
+        write_summary("FAILED", f"{type(error).__name__}: {error}", error)
         sys.exit(1)

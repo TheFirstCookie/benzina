@@ -12,6 +12,10 @@ from .config import (CONNECT_TIMEOUT, REQUEST_TIMEOUT, FETCH_ATTEMPTS,
 from .parsing import parse_date, parse_price
 from .models import PricePoint
 
+class SourceUnavailable(RuntimeError):
+    """A source could not return usable publication history."""
+
+
 def log_dns(url):
     host = urlsplit(url).hostname
     try:
@@ -77,7 +81,7 @@ def fetch_table_rows(url, diagnostics_dir):
                          rows[0].date.date(), rows[0].price)
             return rows
     title = soup.title.get_text(strip=True) if soup.title else "(no title)"
-    raise RuntimeError(f"ANRE page has fewer than two valid price rows: {url}; "
+    raise SourceUnavailable(f"ANRE page has fewer than two valid price rows: {url}; "
                        f"title={title!r}; tables={len(soup.find_all('table'))}; "
                        "see diagnostics HTML")
 
@@ -99,7 +103,7 @@ def get_table_rows(url, diagnostics_dir, fetch=None):
             if attempt == FETCH_ATTEMPTS:
                 log_dns(url)
                 log_dns(candidate)
-                raise RuntimeError(
+                raise SourceUnavailable(
                     f"ANRE fetch failed after {FETCH_ATTEMPTS} attempts: "
                     f"{type(e).__name__}: {e}"
                 ) from e
@@ -126,6 +130,6 @@ def fetch_mirrored_history(decode, diagnostics_dir):
         except (requests.RequestException, ValueError, KeyError, TypeError) as error:
             logging.warning("ANRE history mirror failed: %s", error)
             if attempt == MIRROR_ATTEMPTS:
-                raise RuntimeError(f"ANRE history mirror failed after {attempt} attempts: {error}") from error
+                raise SourceUnavailable(f"ANRE history mirror failed after {attempt} attempts: {error}") from error
             time.sleep(FETCH_RETRY_DELAY)
 

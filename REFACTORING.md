@@ -17,3 +17,5 @@ Each numbered step is verified before its commit is pushed. Dry runs never post 
 7. **Scheduling:** `fuelbot/scheduler.py` owns preparation/send waits; reporting workers execute immediately and `bot.py` is a CLI entry point. Scheduled ordering, late starts, winter/summer and dry-run no-wait tests pass.
 
 8. **Delivery tracking:** SQLite persists local state and the `bot-deliveries` Git branch persists Actions state. Atomic reservations, confirmed message IDs, explicit rejection retries, ambiguous timeout blocking, process restart, concurrent reservation and storage failure tests pass (43 tests total). Live GitHub read/write verified by importing the already-confirmed November 5 message 332, then verifying a second reservation is blocked; no Telegram message was sent.
+
+9. **Diagnostics:** UTC logs, stage history and redacted text/JSON summaries distinguish invalid data, source/network errors, Telegram rejection/uncertainty and delivery-storage failures. Token/chat/GitHub credential redaction tests and failure-category tests pass.
