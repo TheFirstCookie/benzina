@@ -111,74 +111,35 @@ def get_history(points, limit=15):
     return [point.date for point in selected], [point.price for point in selected]
 
 
-def parse_mirrored_history(payload):
-    """Validate ANRE publication history republished by Logos Press."""
-    source = payload["source"]
-    if source["name"] != "ANRE" or source["url"] not in ("https://anre.md", "https://anre.md/"):
-        raise ValueError("History feed does not identify the official ANRE source")
-    latest = datetime.strptime(source["published_date"], "%Y-%m-%d")
-    if latest.date() != expected_publication_date():
-        raise ValueError(f"ANRE publication date {latest.date()} is stale or future; "
-                         f"expected {expected_publication_date()}")
-    histories = []
-    for key in ("gasoline_95", "diesel"):
-        product = payload["products"][key]
-        points = {}
-        for point in product["history"]:
-            date = datetime.strptime(point["date"], "%Y-%m-%d")
-            price = point["price"]
-            if (isinstance(price, bool) or not isinstance(price, (int, float))
-                    or not 0 < price < 1000 or not math.isfinite(price)):
-                raise ValueError(f"Invalid mirrored ANRE price for {key}")
-            if date > latest or date in points:
-                raise ValueError("Future or duplicate date in mirrored ANRE history")
-            points[date] = price
-        dates = sorted(points, reverse=True)
-        if len(dates) < 6 or dates[0] != latest:
-            raise ValueError("Incomplete mirrored ANRE publication history")
-        if (points[latest] != product["current"]
-                or round(points[dates[0]] - points[dates[1]], 2) != product["change"]):
-            raise ValueError("Mirrored ANRE current price or daily change disagrees with history")
-        histories.append([PricePoint(date, points[date]) for date in dates[:10]])
-    if ([point.date for point in histories[0]] != [point.date for point in histories[1]]):
-        raise ValueError("Mirrored fuel histories have different publication dates")
-    return histories
+
+
+
+
+
+
+
+
+
+
+from fuelbot import validation
 
 
 def expected_publication_date():
-    date = datetime.now(TIMEZONE).date()
-    while date.weekday() >= 5:
-        date -= timedelta(days=1)
-    return date
+    return validation.expected_publication_date(datetime.now(TIMEZONE))
+
+
+def parse_mirrored_history(payload):
+    history = validation.decode_history(payload, datetime.now(TIMEZONE))
+    return history.petrol, history.diesel
 
 
 def validate_histories(histories):
-    dates = [[point.date for point in points] for points in histories]
-    if any(len(items) < 2 or items[0].date() != expected_publication_date()
-           for items in dates):
-        raise ValueError(f"ANRE history is stale or future; expected publication "
-                         f"{expected_publication_date()}")
-    if dates[0] != dates[1]:
-        raise ValueError("Fuel histories have different publication dates")
+    return validation.validate_history(FuelHistory(tuple(histories[0]), tuple(histories[1])), datetime.now(TIMEZONE))
 
 
 def history_payload(histories):
-    """Transport official publication rows to a runner unable to reach ANRE."""
-    validate_histories(histories)
-    products = {}
-    for key, rows in zip(("gasoline_95", "diesel"), histories):
-        latest = get_latest(rows)
-        dates, prices = get_history(rows, limit=10)
-        products[key] = {"current": latest["pret"], "change": latest["diferenta"],
-                         "history": [{"date": date.strftime("%Y-%m-%d"), "price": price}
-                                     for date, price in zip(dates, prices)]}
-    payload = {"source": {"name": "ANRE", "url": "https://anre.md/",
-                           "published_date": expected_publication_date().isoformat()},
-               "products": products}
-    parse_mirrored_history(payload)
-    return payload
-
-
+    history = FuelHistory(tuple(histories[0]), tuple(histories[1]))
+    return validation.encode_history(history, datetime.now(TIMEZONE))
 
 
 def complete_report(chart, caption, detail, dry_run):
