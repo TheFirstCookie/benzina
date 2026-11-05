@@ -54,6 +54,8 @@ The [November 5 scheduled run](https://github.com/TheFirstCookie/benzina/actions
 
 On November 5 the local official tables contained the November 5 publication: petrol 30.80 and diesel 35.94 lei/litre. The old seven-day freshness rule allowed the frozen mirror to be marked as a successful daily delivery, suppressing later attempts. Freshness validation, earlier cron opportunities, shared send concurrency, and the optional local relay address these separate problems. The relay is only active after installing its Windows task.
 
+The [verified relay dry run](https://github.com/TheFirstCookie/benzina/actions/runs/42062171434) passed all 24 tests on GitHub, used the supplied November 5 official publication, and generated the original chart/caption with 30.80 and 35.94 lei/litre. It skipped Telegram sending and both delivery-marker steps. Local background execution with `pythonw.exe` also validated the official histories successfully. Windows task triggers use local wall-clock boundaries so they follow Chisinau's daylight-saving changes.
+
 ## October 27, 2026 investigation
 
 The earlier current-cap fallback described below changed the Telegram appearance and omitted comparisons. It has been removed. A [GitHub dry run](https://github.com/TheFirstCookie/benzina/actions/runs/40554263064) confirmed direct HTTP also times out, so the bot now uses the validated Logos Press publication-history feed when the official pages are unreachable.

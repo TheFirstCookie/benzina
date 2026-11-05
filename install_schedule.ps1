@@ -10,7 +10,10 @@ if ((Get-TimeZone).Id -ne 'E. Europe Standard Time') {
 }
 $action = New-ScheduledTaskAction -Execute $python -Argument ('"{0}"' -f $script) -WorkingDirectory $PSScriptRoot
 $triggers = @('12:43', '12:53', '13:03') | ForEach-Object {
-    New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At $_
+    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At $_
+    # A boundary without a UTC offset follows the Windows local clock across DST.
+    $trigger.StartBoundary = (Get-Date $_).ToString("yyyy-MM-dd'T'HH:mm:ss")
+    $trigger
 }
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
