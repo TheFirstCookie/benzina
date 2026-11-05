@@ -18,18 +18,17 @@ import io
 import time
 import logging
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-CHAT_ID   = os.environ.get("CHAT_ID", "")
-TIMEZONE  = ZoneInfo(os.environ.get("TIMEZONE", "Europe/Chisinau"))
-# Ora locala (HH:MM) la care se trimite mesajul; gol = trimite imediat
-SEND_AT   = os.environ.get("SEND_AT", "").strip()
-REQUEST_TIMEOUT = 30
-CONNECT_TIMEOUT = 10
-FETCH_ATTEMPTS = 2
-FETCH_RETRY_DELAY = 5
-HISTORY_MIRROR_URL = "https://logos-pres.md/wp-json/logos/v1/fuel-prices?days=30&lang=ro"
-MIRROR_ATTEMPTS = 3
-DIAGNOSTICS_DIR = Path(os.environ.get("DIAGNOSTICS_DIR", "diagnostics"))
+from fuelbot.config import (
+    Settings, URLS, HISTORY_MIRROR_URL, REQUEST_TIMEOUT, CONNECT_TIMEOUT,
+    FETCH_ATTEMPTS, FETCH_RETRY_DELAY, MIRROR_ATTEMPTS,
+)
+
+_settings = Settings.from_env()
+BOT_TOKEN = _settings.bot_token
+CHAT_ID = _settings.chat_id
+TIMEZONE = _settings.timezone
+SEND_AT = _settings.send_at
+DIAGNOSTICS_DIR = _settings.diagnostics_dir
 STAGE = "startup"
 
 
@@ -83,11 +82,6 @@ def log_dns(url):
         logging.info("DNS %s: %s", host, addresses)
     except OSError as error:
         logging.error("DNS %s failed: %s", host, error)
-
-URLS = {
-    "Benzina 95": "https://anre.md/benzina-95-3-2",
-    "Motorina":   "https://anre.md/motorina-3-3",
-}
 
 LUNI = {
     "ianuarie": "01",
