@@ -1,7 +1,8 @@
 {
-  "status": "reserved",
+  "status": "sent",
   "owner": "de40b92d674f4bcf9f9255680d053195",
-  "updated_at": "2026-11-19T10:50:00.430293+00:00",
+  "updated_at": "2026-11-19T10:50:02.955353+00:00",
   "run_id": "44478851467",
-  "metadata": {}
+  "metadata": {},
+  "message_id": 381
 }
